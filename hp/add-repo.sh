@@ -30,7 +30,7 @@ if ! git config --global --get-all safe.directory | grep $APP_DIR >/dev/null; th
 	log "Added $APP_DIR to the list of safe git directories"
 fi
 # sudo chown -R konrad:gad $APP_DIR
-# sudo chmod -R g+rw $APP_DIR
+chmod -R g+rw $APP_DIR
 
 read -rp "INPUT: Post-push deploy command: " DEPLOY_COMMAND
 SETTINGS_FILE='/data/apps/Git-Auto-Deploy/config.json'
