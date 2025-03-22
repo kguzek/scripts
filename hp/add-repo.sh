@@ -36,7 +36,7 @@ read -rp "INPUT: Post-push deploy command: " DEPLOY_COMMAND
 SETTINGS_FILE='/data/apps/Git-Auto-Deploy/config.json'
 SECRET_TOKEN=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 20 | head -n 1)
 NEW_REPO_ENTRY="{
-  \"url\": \"https://github.com/kguzek/$1\",
+  \"url\": \"https://github.com/kguzek/$1.git\",
   \"branch\": \"main\",
   \"path\": \"$APP_DIR\",
   \"deploy\": $(jq -n --arg var "$DEPLOY_COMMAND" '$var'),
@@ -66,7 +66,7 @@ echo "$UPDATED_REPOSITORIES" >> "$TEMP_SETTINGS_FILE"
 
 mv "$TEMP_SETTINGS_FILE" "$SETTINGS_FILE"
 log "Successfully created repository CI/CD configuration"
-log "Payload URL  (for GitHub webhook): $PAYLOAD_URL"
+log "Payload URL  (for GitHub webhook): $WEBHOOK_PAYLOAD_URL"
 log "Secret token (for GitHub webhook): $SECRET_TOKEN"
 log "Restart the Git Auto Deploy service for configuration to take effect:"
 echo "sudo systemctl restart gitautodeploy"
