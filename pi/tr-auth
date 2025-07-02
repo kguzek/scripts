@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+FILENAME=/tmp/tr_auth_env
+echo -n "export " > $FILENAME
+grep TR_AUTH /home/konrad/webdev/guzek-uk-api/.env | tr -d '\r\n' >> $FILENAME
+source $FILENAME
+cat $FILENAME
+rm $FILENAME
+

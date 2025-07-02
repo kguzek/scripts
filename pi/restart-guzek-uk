@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Systemd service file directory:
+# /usr/lib/systemd/system/
+
+# echo "Restarting Apache2 service..."
+# sudo service apache2 restart
+
+echo "Restarting API service..."
+sudo service guzek-uk restart
+

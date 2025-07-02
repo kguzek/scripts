@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+SLEEP_FOR=${1:-3}
+
+./tr-auth
+
+for ((;;)) {
+	clear
+	transmission-remote -ne -l
+	sleep $SLEEP_FOR
+}
+

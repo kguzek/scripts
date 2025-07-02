@@ -1,0 +1,10 @@
+#!/bin/bash
+
+cd /home/konrad/webdev/guzek-uk-liveseries-server
+PATH=/home/konrad/.nvm/versions/node/v22.12.0/bin:$PATH
+if [[ "$1" == "--compile-only" ]]; then
+				npm run compile	
+else
+				npm run prod
+fi
+

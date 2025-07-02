@@ -1,0 +1,4 @@
+#!/bin/bash
+sudo service dzwonnik-2 restart
+echo "Restarted bot!"
+
