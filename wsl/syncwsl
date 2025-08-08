@@ -1,0 +1,29 @@
+#!/bin/bash
+
+if [ -z $1 ]; then
+	echo "Missing argument"
+	exit 1
+fi
+
+FOLDER=JavaScript
+
+if [ ! -z $2 ]; then
+	FOLDER="$2"
+fi
+
+declare -l FOLDER_LOWER
+FOLDER_LOWER="$FOLDER"
+
+SOURCE="/mnt/c/Users/USER/Documents/Coding/$FOLDER/$1/"
+
+if [ ! -d "$SOURCE" ]; then
+	echo "Invalid folder $1"
+	exit 1
+fi
+
+DESTINATION="$HOME/coding/${FOLDER,,}/$1/"
+if [ ! -d "$DESTINATION" ]; then
+	git clone "git@github.com:kguzek/$1" "$DESTINATION"
+fi
+rsync -av --exclude '.*cache' --exclude 'out' --exclude 'dist' --exclude 'node_modules' --exclude '.next' --exclude '.git' "$SOURCE" "$DESTINATION" && rm -rf "$SOURCE.git" && rm -r "$SOURCE" && echo "Done!"
+
