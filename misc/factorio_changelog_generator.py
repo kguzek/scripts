@@ -22,7 +22,6 @@ from git_utils import (
 )
 
 CATEGORY_MAP = {
-    "info": "Info",
     "major": "Major Features",
     "feat": "Features",
     "minor": "Minor Features",
@@ -40,9 +39,9 @@ CATEGORY_MAP = {
     "control": "Control",
     "translations": "Translation",
     "debug": "Debug",
+    "info": "Info",
     "ease": "Ease of use",
     "locale": "Locale",
-    "other": "Other",
 }
 
 # Prefixes to ignore (commits with these prefixes will be skipped)
