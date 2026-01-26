@@ -4,6 +4,7 @@ Changelog Generator for Factorio Mods
 Parses git commit history between tags and generates a changelog.txt file
 following Factorio's changelog format requirements.
 """
+
 import argparse
 import json
 import re
