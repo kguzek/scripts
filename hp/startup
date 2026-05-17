@@ -5,12 +5,27 @@ set -e
 # prompt for password at start rather than after running pm2
 sudo -v
 
+echo "Starting Guzek VPN..."
+if ! sudo wg show | grep guzek-vpn-peer >/dev/null; then
+  sudo wg-quick up guzek-vpn-peer
+else
+  echo "Guzek VPN already running"
+fi
+
+echo
+
+echo "Starting PM2 processes"
 source "$HOME/.nvm/nvm.sh"
 pm2 resurrect
 pm2 stop 1
 pm2 start 1
 
+echo
+echo "Starting Harbor containers"
 cd /opt/harbor
 sudo docker compose up -d
 cd -
+
+echo
+echo "Done!"
 
