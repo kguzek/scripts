@@ -1,0 +1,6 @@
+#!/bin/sh
+
+clear
+tail_lines="$(($(tput lines) - 1))"
+tail -n "$tail_lines" -f /data/apps/Git-Auto-Deploy/gitautodeploy.log
+
