@@ -1,0 +1,65 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+mode="$1"
+
+if [[ "$mode" != "--sink" && "$mode" != "--source" ]]; then
+  echo "Usage: $0 --sink | --source"
+  exit 1
+fi
+
+if [[ "$mode" == "--sink" ]]; then
+  list_cmd=(pactl list sinks short)
+  get_default=(pactl get-default-sink)
+  set_default=(pactl set-default-sink)
+  move_cmd=(pactl move-sink-input)
+else
+  list_cmd=(pactl list sources short)
+  get_default=(pactl get-default-source)
+  set_default=(pactl set-default-source)
+fi
+
+typeset -a ids names
+
+# build arrays
+while read -r id name _; do
+  if [[ "$mode" == "--source" && ( "$name" == *.monitor || "$name" == alsa_input.pci-* ) ]]; then
+    continue
+  fi
+  ids+=("$id")
+  names+=("$name")
+done < <("${list_cmd[@]}")
+
+(( ${#ids[@]} == 0 )) && { echo "No devices"; exit 1; }
+
+current="$("${get_default[@]}")"
+
+current_index=-1
+
+for (( i = 1; i <= ${#names[@]}; i++ )); do
+  if [[ "${names[$i]}" == "$current" ]]; then
+    current_index=$i
+    break
+  fi
+done
+
+# fallback if not found
+if (( current_index == -1 )); then
+  next_index=1
+else
+  next_index=$(( current_index % ${#names[@]} + 1 ))
+fi
+
+next_name="${names[$next_index]}"
+next_id="${ids[$next_index]}"
+
+"${set_default[@]}" "$next_name"
+
+# move active streams (sink only; sources don’t need this usually)
+if [[ "$mode" == "--sink" ]]; then
+  pactl list short sink-inputs | awk '{print $1}' | while read -r input; do
+    pactl move-sink-input "$input" "$next_name"
+  done
+fi
+
+echo "Switched default audio ${mode#--} -> $next_name (device $next_id)"
