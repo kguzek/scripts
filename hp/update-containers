@@ -4,6 +4,8 @@ set -e
 
 script_name=${0:t}
 dry_run=false
+max_concurrent_checks=10
+tmp_root=/tmp/update-containers-script
 
 case "${1:-}" in
   --dry-run|-n)
@@ -79,25 +81,78 @@ compose_needs_pull() {
   [ "$needs_pull" = true ]
 }
 
-for compose_file in /data/apps/*/compose.yaml(N) /opt/*/compose.yaml(N); do
+check_compose_project() {
+  local compose_file="$1"
+  local result_file="$2"
+  local container_dir project_name
+
   container_dir=$(dirname "$compose_file")
+
+  (
+    cd "$container_dir"
+
+    log-status unchanged "Checking $container_dir"
+    project_name="$(basename "$container_dir")"
+
+    if compose_needs_pull; then
+      print -r -- "$container_dir" > "$result_file"
+    else
+      log-status unchanged "Images are already current"
+    fi
+  )
+}
+
+wait_for_checks() {
+  local pid
+
+  for pid in "${check_pids[@]}"; do
+    if ! wait "$pid"; then
+      check_failures=$((check_failures + 1))
+    fi
+  done
+
+  check_pids=()
+}
+
+mkdir -p "$tmp_root"
+tmp_dir=$(mktemp -d "$tmp_root/run.XXXXXXXXXX")
+trap 'rm -rf "$tmp_dir"' EXIT
+
+compose_files=(/data/apps/*/compose.yaml(N) /opt/*/compose.yaml(N))
+check_failures=0
+check_index=0
+check_pids=()
+
+for compose_file in "${compose_files[@]}"; do
+  check_index=$((check_index + 1))
+  check_compose_project "$compose_file" "$tmp_dir/$check_index" &
+  check_pids+=("$!")
+
+  if (( ${#check_pids} >= max_concurrent_checks )); then
+    wait_for_checks
+  fi
+done
+
+wait_for_checks
+
+if (( check_failures > 0 )); then
+  log-status failed "$check_failures container check(s) failed"
+  exit 1
+fi
+
+for result_file in "$tmp_dir"/*(Nn); do
+  container_dir=$(<"$result_file")
+  project_name="$(basename "$container_dir")"
 
   cd "$container_dir"
 
-  log-status unchanged "Checking $container_dir"
-  project_name="$(basename "$container_dir")"
-
-  if compose_needs_pull; then
-    if [ "$dry_run" = true ]; then
-      log-status changed "Would update $project_name"
-    else
-      log-status changed "Updating $project_name"
-      docker compose pull
-      docker compose down
-      docker compose up -d
-    fi
+  if [ "$dry_run" = true ]; then
+    log-status changed "Would update $project_name"
   else
-    log-status unchanged "Images are already current"
+    log-status changed "Updating $project_name"
+    docker compose pull
+    docker compose down
+    docker compose up -d
   fi
 done
 
