@@ -1,0 +1,103 @@
+#!/usr/bin/env zsh
+
+set -e
+
+script_name=${0:t}
+dry_run=false
+
+case "${1:-}" in
+  --dry-run|-n)
+    dry_run=true
+    shift
+    ;;
+  "")
+    ;;
+  *)
+    echo "Usage: $script_name [--dry-run|-n]" >&2
+    exit 2
+    ;;
+esac
+
+if [ "$#" -ne 0 ]; then
+  echo "Usage: $script_name [--dry-run|-n]" >&2
+  exit 2
+fi
+
+for required_command in log-status time-script; do
+  if command -v "$required_command" >/dev/null 2>&1; then
+    continue
+  fi
+
+  echo "[x] Missing required command: $required_command" >&2
+  exit 1
+done
+
+source <(time-script --start)
+
+remote_digest() {
+  docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}'
+}
+
+local_digests() {
+  docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$1" 2>/dev/null \
+    | cut -d@ -f2
+}
+
+image_is_pinned() {
+  [[ "$1" == *@sha256:* ]]
+}
+
+image_exists_locally() {
+  docker image inspect "$1" >/dev/null 2>&1
+}
+
+compose_needs_pull() {
+  local image remote
+  local needs_pull=false
+  local -a images
+
+  images=(${(f)"$(docker compose config --images)"})
+
+  for image in "${images[@]}"; do
+    if image_is_pinned "$image"; then
+      if ! image_exists_locally "$image"; then
+        log-status changed "Missing local image: $image"
+        needs_pull=true
+      fi
+
+      continue
+    fi
+
+    remote=$(remote_digest "$image")
+
+    if ! local_digests "$image" | grep -qx "$remote"; then
+      log-status changed "Update available: $image"
+      needs_pull=true
+    fi
+  done
+
+  [ "$needs_pull" = true ]
+}
+
+for compose_file in /data/apps/*/compose.yaml(N) /opt/*/compose.yaml(N); do
+  container_dir=$(dirname "$compose_file")
+
+  cd "$container_dir"
+
+  log-status unchanged "Checking $container_dir"
+
+  if compose_needs_pull; then
+    if [ "$dry_run" = true ]; then
+      log-status changed "Would update compose project"
+    else
+      log-status changed "Updating compose project"
+      docker compose pull
+      docker compose down
+      docker compose up -d
+    fi
+  else
+    log-status unchanged "Images are already current"
+  fi
+done
+
+log-status complete "All containers updated in $(time-script --end)s"

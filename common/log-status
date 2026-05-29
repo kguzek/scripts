@@ -1,0 +1,55 @@
+#!/usr/bin/env zsh
+
+set -e
+
+if [[ $# -lt 2 ]]; then
+  echo "Usage: ${0:t} LEVEL MESSAGE..." >&2
+  exit 2
+fi
+
+level="$1"
+shift
+message="$*"
+
+if [[ -t 1 ]]; then
+  c_reset=$'\e[0m'
+  c_green=$'\e[32m'
+  c_yellow=$'\e[33m'
+  c_blue=$'\e[34m'
+  c_red=$'\e[31m'
+else
+  c_reset=''
+  c_green=''
+  c_yellow=''
+  c_blue=''
+  c_red=''
+fi
+
+case "$level" in
+  changed)
+    prefix='[+]'
+    color="$c_green"
+    ;;
+  complete)
+    prefix='[✓]'
+    color="$c_green"
+    ;;
+  warn)
+    prefix='[!]'
+    color="$c_yellow"
+    ;;
+  unchanged)
+    prefix='[=]'
+    color="$c_blue"
+    ;;
+  failed)
+    prefix='[x]'
+    color="$c_red"
+    ;;
+  *)
+    prefix='[?]'
+    color="$c_yellow"
+    ;;
+esac
+
+printf '%b%s%b %s\n' "$color" "$prefix" "$c_reset" "$message"

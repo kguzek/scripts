@@ -1,0 +1,28 @@
+#!/usr/bin/env zsh
+
+set -e
+
+current_time() {
+  date +%s.%N
+}
+
+case "${1:-}" in
+  --start)
+    printf 'export time_script_measurement_start_time=%q\n' "$(current_time)"
+    ;;
+  --end)
+    if [[ -z ${time_script_measurement_start_time:-} ]]; then
+      echo "${0:t}: missing time_script_measurement_start_time; run: source <(time-script --start)" >&2
+      exit 1
+    fi
+
+    start_time="$time_script_measurement_start_time"
+    end_time=$(current_time)
+    elapsed=$(($end_time - $start_time))
+    printf '%.3f\n' "$elapsed"
+    ;;
+  *)
+    echo "Usage: ${0:t} --start|--end" >&2
+    exit 2
+    ;;
+esac
