@@ -85,12 +85,13 @@ for compose_file in /data/apps/*/compose.yaml(N) /opt/*/compose.yaml(N); do
   cd "$container_dir"
 
   log-status unchanged "Checking $container_dir"
+  project_name="$(basename "$container_dir")"
 
   if compose_needs_pull; then
     if [ "$dry_run" = true ]; then
-      log-status changed "Would update compose project"
+      log-status changed "Would update $project_name"
     else
-      log-status changed "Updating compose project"
+      log-status changed "Updating $project_name"
       docker compose pull
       docker compose down
       docker compose up -d
