@@ -16,12 +16,14 @@ if [[ -t 1 ]]; then
   c_green=$'\e[32m'
   c_yellow=$'\e[33m'
   c_blue=$'\e[34m'
+  c_grey=$'\e[90m'
   c_red=$'\e[31m'
 else
   c_reset=''
   c_green=''
   c_yellow=''
   c_blue=''
+  c_grey=''
   c_red=''
 fi
 
@@ -37,6 +39,10 @@ case "$level" in
   warn)
     prefix='[!]'
     color="$c_yellow"
+    ;;
+  info)
+    prefix='[·]'
+    color="$c_grey"
     ;;
   unchanged)
     prefix='[=]'

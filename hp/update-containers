@@ -91,7 +91,7 @@ check_compose_project() {
   (
     cd "$container_dir"
 
-    log-status unchanged "Checking $container_dir"
+    log-status info "Checking $container_dir"
     project_name="$(basename "$container_dir")"
 
     if compose_needs_pull; then
