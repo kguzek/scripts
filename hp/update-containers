@@ -156,4 +156,10 @@ for result_file in "$tmp_dir"/*(Nn); do
   fi
 done
 
-log-status complete "All containers updated in $(time-script --end)s"
+
+if [ "$dry_run" = true ]; then
+  updated_verb="checked for updates"
+else
+  updated_verb="updated"
+fi
+  log-status complete "All containers $updated_verb in $(time-script --end)s"
