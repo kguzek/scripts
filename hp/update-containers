@@ -4,7 +4,7 @@ set -e
 
 script_name=${0:t}
 dry_run=false
-max_concurrent_checks=10
+max_concurrent_checks=16
 tmp_root=/tmp/update-containers-script
 
 case "${1:-}" in
@@ -97,7 +97,7 @@ check_compose_project() {
     if compose_needs_pull; then
       print -r -- "$container_dir" > "$result_file"
     else
-      log-status unchanged "Images are already current"
+      log-status unchanged "$project_name is up to date"
     fi
   )
 }
