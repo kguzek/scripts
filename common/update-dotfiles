@@ -1,7 +1,3 @@
 #!/bin/sh
 
-set -e
-cd "$HOME/repos/dotfiles"
-git -c core.hooksPath=/dev/null pull
-./postinstall.zsh # this ensures the postinstaller is always run, not just on changes
-cd -
+"$HOME/repos/dotfiles/postinstall.zsh" "$@"
