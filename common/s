@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env zsh
 
 set -e
 target="$1"
@@ -22,7 +22,7 @@ succeed() {
   local address="$1"
   local label="$2"
   log-status complete "Successful connection to $target via $label"
-  exec ssh "$address" $ssh_arguments
+  exec ssh -t "$address" $ssh_arguments
 }
 
 

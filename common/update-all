@@ -5,7 +5,7 @@ machines=(pi acer hp rig)
 local_machine="$(hostname -s)"
 
 for machine in $machines; do
-  s "$machine" -t update-dotfiles
+  s "$machine" update-dotfiles
 done
 
 # if running on some other machine (e.g. macbook-av)
@@ -16,7 +16,7 @@ fi
 
 # update for root as well. do this separately so there is less time between sudo prompts
 for machine in $machines; do
-  s "$machine" -t sudo -i update-dotfiles
+  s "$machine" sudo --login update-dotfiles
 done
 
 log-status complete "Updated all machines in $(time-script --end)s"
