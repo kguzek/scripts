@@ -1,15 +1,21 @@
 #!/usr/bin/env zsh
 
 set -e
+PING_TIMEOUT_SECONDS=0.1
 target="$1"
 shift
+target_hostname="${target#*@}"
 ssh_arguments=("$@")
 routes=(
-  "lan-$target.guzek.uk" "LAN"
-  "vpn-$target.guzek.uk" "VPN"
-  "ssh-$target.guzek.uk" "Cloudflare tunnel"
+  "lan-$target_hostname.guzek.uk" "LAN"
+  "vpn-$target_hostname.guzek.uk" "VPN"
+  "ssh-$target_hostname.guzek.uk" "Cloudflare tunnel"
 )
-PING_TIMEOUT_SECONDS=0.1
+if [ "$target" = "$target_hostname" ]; then
+  target_user=""
+else
+  target_user="${target%@*}@"
+fi
 
 test_connection() {
   local address="$1"
@@ -22,7 +28,7 @@ succeed() {
   local address="$1"
   local label="$2"
   log-status complete "Successful connection to $target via $label"
-  exec ssh -t "$address" $ssh_arguments
+  exec ssh -t "$target_user$address" $ssh_arguments
 }
 
 
