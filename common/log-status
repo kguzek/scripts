@@ -2,14 +2,7 @@
 
 set -e
 
-if [[ $# -lt 2 ]]; then
-  echo "Usage: ${0:t} LEVEL MESSAGE..." >&2
-  exit 2
-fi
-
-level="$1"
-shift
-message="$*"
+script_name="${0:t}"
 
 if [[ -t 1 ]]; then
   c_reset=$'\e[0m'
@@ -27,35 +20,53 @@ else
   c_red=''
 fi
 
-case "$level" in
-  changed)
-    prefix='[+]'
-    color="$c_green"
-    ;;
-  complete)
-    prefix='[✓]'
-    color="$c_green"
-    ;;
-  warn)
-    prefix='[!]'
-    color="$c_yellow"
-    ;;
-  info)
-    prefix='[·]'
-    color="$c_grey"
-    ;;
-  unchanged)
-    prefix='[=]'
-    color="$c_blue"
-    ;;
-  failed)
-    prefix='[x]'
-    color="$c_red"
-    ;;
-  *)
-    prefix='[?]'
-    color="$c_yellow"
-    ;;
-esac
+status_format=(
+  changed '[+]' "$c_green"
+  complete '[✓]' "$c_green"
+  warn '[!]' "$c_yellow"
+  info '[·]' "$c_grey"
+  unchanged '[=]' "$c_blue"
+  failed '[x]' "$c_red"
+)
 
-printf '%b%s%b %s\n' "$color" "$prefix" "$c_reset" "$message"
+print_usage() {
+  local i level
+  local levels=()
+
+  for (( i = 1; i <= ${#status_format}; i += 3 )); do
+    level="${status_format[$i]}"
+    levels+=("${status_format[$i + 2]}$level$c_reset")
+  done
+
+  echo "Usage: $script_name LEVEL MESSAGE..." >&2
+  echo "Available levels: ${(j:, :)levels}" >&2
+}
+
+if [[ $# -lt 2 || "$1" == -h || "$1" == --help ]]; then
+  print_usage
+  [[ "$1" == -h || "$1" == --help ]] && exit 0
+  exit 2
+fi
+
+level="$1"
+shift
+message="$*"
+
+prefix='[?]'
+color="$c_yellow"
+
+for (( i = 1; i <= ${#status_format}; i += 3 )); do
+  if [[ "$level" == "${status_format[$i]}" ]]; then
+    prefix="${status_format[$i + 1]}"
+    color="${status_format[$i + 2]}"
+    break
+  fi
+done
+
+if [[ "$level" == warn || "$level" == failed ]]; then
+  output_stream=2
+else
+  output_stream=1
+fi
+
+printf '%b%s%b %s\n' "$color" "$prefix" "$c_reset" "$message" >&$output_stream
