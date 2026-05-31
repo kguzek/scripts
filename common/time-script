@@ -3,18 +3,14 @@
 set -e
 program_name="${0:t}"
 
-zmodload zsh/datetime || {
+if ! zmodload zsh/datetime; then
   log-status failed "$program_name: failed to load zsh/datetime"
   exit 1
-}
-
-current_time() {
-  print -r -- "$EPOCHREALTIME"
-}
+fi
 
 case "${1:-}" in
   --start)
-    printf 'export time_script_measurement_start_time=%q\n' "$(current_time)"
+    printf 'export time_script_measurement_start_time=%q\n' "$EPOCHREALTIME"
     ;;
   --end)
     if [[ -z ${time_script_measurement_start_time:-} ]]; then
@@ -23,9 +19,17 @@ case "${1:-}" in
     fi
 
     start_time="$time_script_measurement_start_time"
-    end_time=$(current_time)
-    elapsed=$(($end_time - $start_time))
-    printf '%.3f\n' "$elapsed"
+    elapsed=$((EPOCHREALTIME - start_time))
+
+    if (( elapsed < 1 )); then
+      decimal_places=3
+    elif (( elapsed < 10 )); then
+      decimal_places=2
+    else
+      decimal_places=1
+    fi
+
+    printf "%.${decimal_places}f\n" "$elapsed"
     ;;
   *)
     log-status failed "Usage: ${0:t} --start|--end"
