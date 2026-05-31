@@ -1,0 +1,50 @@
+#!/usr/bin/env zsh
+
+set -e
+
+target="$1"
+program_name="${0:t}"
+usage_message="Usage: $program_name [-h|--help] [target]"
+
+NETWORK_HOSTNAME="t15.guzek.uk"
+NETWORK_WOL_EXTERNAL_PORT=1999
+
+typeset -A MAC_ADDRESSES=(
+  hp 3c:52:82:76:8d:92
+  rig 18:c0:4d:39:46:c6
+)
+
+print_targets() {
+  log-status info "Available targets: ${(j: :)${(ok)MAC_ADDRESSES}}"
+}
+
+if [ -z "$target" ] || [ "$target" = "-h" ] || [ "$target" = "--help" ]; then
+  echo "$usage_message"
+  print_targets
+  exit 0
+fi
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+if command_exists wol; then
+  WAKE_COMMAND='wol'
+elif command_exists wakeonlan; then
+  WAKE_COMMAND='wakeonlan'
+else
+  log-status failed "Neither wakeonlan nor wol are available on the system. Install a supported tool and retry."
+  exit 2
+fi
+
+if [[ -n "${MAC_ADDRESSES[$target]}" ]]; then
+  mac_address="${MAC_ADDRESSES[$target]}"
+  NETWORK_IP_ADDRESS="$(dig +short "$NETWORK_HOSTNAME")"
+  "$WAKE_COMMAND" --ip "$NETWORK_IP_ADDRESS" --port "$NETWORK_WOL_EXTERNAL_PORT" "$mac_address"
+  log-status complete "Successfully sent wake packet to $target"
+  exit 0
+fi
+
+log-status failed "Invalid target: $target"
+print_targets
+exit 1
