@@ -2,30 +2,36 @@
 
 set -e
 
+log_failure() {
+  local program_name="$0"
+  local line_number="$1"
+  local line_content="$(sed -n "$line_number"p "$program_name")"
+  log-status failed "System startup failed on line $line_number: $line_content"
+}
+
+trap 'log_failure $LINENO' ERR
+
 # prompt for password at start rather than after running pm2
 sudo -v
 
-echo "Starting Guzek VPN..."
+log-status info "Starting Guzek VPN..."
 if ! sudo wg show | grep guzek-vpn-peer >/dev/null; then
   sudo wg-quick up guzek-vpn-peer
 else
-  echo "Guzek VPN already running"
+  log-status unchanged "Guzek VPN already running"
 fi
 
 echo
-
-echo "Starting PM2 processes"
+log-status info "Starting PM2 processes"
 source "$HOME/.nvm/nvm.sh"
 pm2 resurrect
 pm2 stop 1
 pm2 start 1
 
 echo
-echo "Starting Harbor containers"
+log-status info "Starting Harbor containers"
 cd /opt/harbor
 sudo docker compose up -d
-cd -
 
 echo
-echo "Done!"
-
+log-status complete "All systems started successfully"
