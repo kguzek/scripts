@@ -2,6 +2,8 @@
 
 set -e
 target="$1"
+shift
+ssh_arguments=("$@")
 routes=(
   "lan-$target.guzek.uk" "LAN"
   "vpn-$target.guzek.uk" "VPN"
@@ -10,24 +12,26 @@ routes=(
 PING_TIMEOUT_SECONDS=0.1
 
 test_connection() {
-  log-status info "Attempting connection to $target via $2"
-  ping -c 1 -W "$PING_TIMEOUT_SECONDS" "$1" >/dev/null 2>&1
+  local address="$1"
+  local label="$2"
+  log-status info "Attempting connection to $target via $label"
+  ping -c 1 -W "$PING_TIMEOUT_SECONDS" "$address" >/dev/null 2>&1
 }
 
 succeed() {
-  log-status complete "Connection established to $target via $2"
-  ssh "$1"
+  local address="$1"
+  local label="$2"
+  log-status complete "Successful connection to $target via $label"
+  ssh "$address" $ssh_arguments
 }
 
 
-for (( i = 1; i <= $#routes; i += 2 )); do
-  host=$routes[i]
-  label=$routes[i+1]
-
+for host label in ${(kv)routes}; do
   if test_connection "$host" "$label"; then
     succeed "$host" "$label"
     exit 0
   fi
 done
 
-log-status failed "No available route to $target" >&2
+log-status failed "No available route to $target"
+exit 1
