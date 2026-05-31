@@ -40,7 +40,7 @@ fi
 if [[ -n "${MAC_ADDRESSES[$target]}" ]]; then
   mac_address="${MAC_ADDRESSES[$target]}"
   NETWORK_IP_ADDRESS="$(dig +short "$NETWORK_HOSTNAME")"
-  "$WAKE_COMMAND" --ip "$NETWORK_IP_ADDRESS" --port "$NETWORK_WOL_EXTERNAL_PORT" "$mac_address"
+  "$WAKE_COMMAND" -i "$NETWORK_IP_ADDRESS" -p "$NETWORK_WOL_EXTERNAL_PORT" "$mac_address"
   log-status complete "Successfully sent wake packet to $target"
   exit 0
 fi
