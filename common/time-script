@@ -1,9 +1,15 @@
 #!/usr/bin/env zsh
 
 set -e
+program_name="${0:t}"
+
+zmodload zsh/datetime || {
+  log-status failed "$program_name: failed to load zsh/datetime"
+  exit 1
+}
 
 current_time() {
-  date +%s.%N
+  print -r -- "$EPOCHREALTIME"
 }
 
 case "${1:-}" in
@@ -12,7 +18,7 @@ case "${1:-}" in
     ;;
   --end)
     if [[ -z ${time_script_measurement_start_time:-} ]]; then
-      echo "${0:t}: missing time_script_measurement_start_time; run: source <(time-script --start)" >&2
+      log-status failed "$program_name: missing time_script_measurement_start_time; run: source <($program_name --start)"
       exit 1
     fi
 
@@ -22,7 +28,7 @@ case "${1:-}" in
     printf '%.3f\n' "$elapsed"
     ;;
   *)
-    echo "Usage: ${0:t} --start|--end" >&2
+    log-status failed "Usage: ${0:t} --start|--end"
     exit 2
     ;;
 esac
