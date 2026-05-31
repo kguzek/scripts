@@ -1,5 +1,6 @@
 #!/usr/bin/env zsh
 
+source <(time-script --start)
 machines=(pi acer hp rig)
 local_machine="$(hostname -s)"
 
@@ -17,3 +18,5 @@ fi
 for machine in $machines; do
   s "$machine" -t sudo -i update-dotfiles
 done
+
+log-status complete "Updated all machines in $(time-script --end)s"
