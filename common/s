@@ -1,0 +1,33 @@
+#!/bin/zsh
+
+set -e
+target="$1"
+routes=(
+  "lan-$target.guzek.uk" "LAN"
+  "vpn-$target.guzek.uk" "VPN"
+  "ssh-$target.guzek.uk" "Cloudflare tunnel"
+)
+PING_TIMEOUT_SECONDS=0.1
+
+test_connection() {
+  log-status info "Attempting connection to $target via $2"
+  ping -c 1 -W "$PING_TIMEOUT_SECONDS" "$1" >/dev/null 2>&1
+}
+
+succeed() {
+  log-status complete "Connection established to $target via $2"
+  ssh "$1"
+}
+
+
+for (( i = 1; i <= $#routes; i += 2 )); do
+  host=$routes[i]
+  label=$routes[i+1]
+
+  if test_connection "$host" "$label"; then
+    succeed "$host" "$label"
+    exit 0
+  fi
+done
+
+log-status failed "No available route to $target" >&2
