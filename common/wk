@@ -7,11 +7,15 @@ program_name="${0:t}"
 usage_message="Usage: $program_name [-h|--help] [target]"
 
 NETWORK_HOSTNAME="t15.guzek.uk"
-NETWORK_WOL_EXTERNAL_PORT=1999
 
 typeset -A MAC_ADDRESSES=(
   hp 3c:52:82:76:8d:92
   rig 18:c0:4d:39:46:c6
+)
+
+typeset -A WOL_EXTERNAL_PORTS=(
+  hp 1901
+  rig 1902
 )
 
 print_targets() {
@@ -39,8 +43,15 @@ fi
 
 if [[ -n "${MAC_ADDRESSES[$target]}" ]]; then
   mac_address="${MAC_ADDRESSES[$target]}"
+  wol_external_port="${WOL_EXTERNAL_PORTS[$target]}"
+
+  if [[ -z "$wol_external_port" ]]; then
+    log-status failed "No WoL port configured for target: $target"
+    exit 2
+  fi
+
   NETWORK_IP_ADDRESS="$(dig +short "$NETWORK_HOSTNAME")"
-  "$WAKE_COMMAND" -i "$NETWORK_IP_ADDRESS" -p "$NETWORK_WOL_EXTERNAL_PORT" "$mac_address"
+  "$WAKE_COMMAND" -i "$NETWORK_IP_ADDRESS" -p "$wol_external_port" "$mac_address"
   log-status complete "Successfully sent wake packet to $target"
   exit 0
 fi
