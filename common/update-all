@@ -1,0 +1,19 @@
+#!/usr/bin/env zsh
+
+machines=(pi acer hp rig)
+local_machine="$(hostname -s)"
+
+for machine in $machines; do
+  s "$machine" -t update-dotfiles
+done
+
+# if running on some other machine (e.g. macbook-av)
+# (i) returns an index greater than the array length if the element isn't found
+if [[ $machines[(i)$local_machine] -gt ${#machines} ]]; then
+  update-dotfiles
+fi
+
+# update for root as well. do this separately so there is less time between sudo prompts
+for machine in $machines; do
+  s "$machine" -t sudo -i update-dotfiles
+done
