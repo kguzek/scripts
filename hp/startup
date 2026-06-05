@@ -6,7 +6,7 @@ set -e
 sudo -v
 
 startup-user
-sudo startup-root
+sudo -i startup-root
 
 echo
 log-status complete "All systems started successfully"
