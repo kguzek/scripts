@@ -7,8 +7,8 @@ shift
 target_hostname="${target#*@}"
 ssh_arguments=("$@")
 routes=(
-  "lan-$target_hostname.guzek.uk" "LAN"
-  "vpn-$target_hostname.guzek.uk" "VPN"
+  "$target_hostname.lan.guzek.uk" "LAN"
+  "$target_hostname.vpn.guzek.uk" "VPN"
   "ssh-$target_hostname.guzek.uk" "Cloudflare tunnel"
 )
 if [ "$target" = "$target_hostname" ]; then
