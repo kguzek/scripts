@@ -3,6 +3,8 @@
 set -e
 program_name="${0:t}"
 
+START_TIME_FILE_PATH='/tmp/time-script/start-time.txt'
+
 if ! zmodload zsh/datetime; then
   log-status failed "$program_name: failed to load zsh/datetime"
   exit 1
@@ -10,15 +12,15 @@ fi
 
 case "${1:-}" in
   --start)
-    printf 'export time_script_measurement_start_time=%q\n' "$EPOCHREALTIME"
+    mkdir -p "${START_TIME_FILE_PATH:h}"
+    printf '%s\n' "$EPOCHREALTIME" > "$START_TIME_FILE_PATH"
     ;;
   --end)
-    if [[ -z ${time_script_measurement_start_time:-} ]]; then
-      log-status failed "$program_name: missing time_script_measurement_start_time; run: source <($program_name --start)"
+    if ! read -r start_time < "$START_TIME_FILE_PATH"; then
+      log-status failed "$program_name: missing file $START_TIME_FILE_PATH; run: $program_name --start"
       exit 1
     fi
 
-    start_time="$time_script_measurement_start_time"
     elapsed=$((EPOCHREALTIME - start_time))
 
     if (( elapsed < 1 )); then

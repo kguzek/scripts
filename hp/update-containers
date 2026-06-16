@@ -34,7 +34,7 @@ for required_command in log-status time-script; do
   exit 1
 done
 
-source <(time-script --start)
+time-script --start
 
 remote_digest() {
   docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}'

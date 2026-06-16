@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 
-source <(time-script --start)
+time-script --start
 machines=(pi acer hp rig)
 local_machine="$(hostname -s)"
 
