@@ -11,6 +11,7 @@ if [[ -t 1 ]]; then
   c_blue=$'\e[34m'
   c_grey=$'\e[90m'
   c_red=$'\e[31m'
+  c_purple=$'\e[35m'
 else
   c_reset=''
   c_green=''
@@ -18,6 +19,7 @@ else
   c_blue=''
   c_grey=''
   c_red=''
+  c_purple=''
 fi
 
 status_format=(
@@ -27,6 +29,7 @@ status_format=(
   info '[·]' "$c_grey"
   unchanged '[=]' "$c_blue"
   failed '[x]' "$c_red"
+  input '[?]' "$c_purple"
 )
 
 print_usage() {
@@ -63,10 +66,21 @@ for (( i = 1; i <= ${#status_format}; i += 3 )); do
   fi
 done
 
-if [[ "$level" == warn || "$level" == failed ]]; then
+if [[ "$level" == input ]]; then
   output_stream=2
+  newline=''
 else
-  output_stream=1
+  if [[ "$level" == warn || "$level" == failed ]]; then
+    output_stream=2
+  else
+    output_stream=1
+  fi
+  newline='\n'
 fi
 
-printf '%b%s%b %s\n' "$color" "$prefix" "$c_reset" "$message" >&$output_stream
+printf '%b%s%b %s%b' "$color" "$prefix" "$c_reset" "$message" "$newline" >&$output_stream
+
+if [[ "$level" == input ]]; then
+  read -r REPLY
+  printf '%s\n' "$REPLY"
+fi

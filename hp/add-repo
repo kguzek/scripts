@@ -28,7 +28,7 @@ fi
 # sudo chown -R konrad:gad $APP_DIR
 chmod -R g+rw $APP_DIR
 
-read -rp "INPUT: Post-push deploy command: " DEPLOY_COMMAND
+DEPLOY_COMMAND=$(log-status input 'Post-push deploy command: ')
 SETTINGS_FILE='/data/apps/Git-Auto-Deploy/config.json'
 SECRET_TOKEN=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 20 | head -n 1)
 NEW_REPO_ENTRY="{
