@@ -1,0 +1,26 @@
+#!/usr/bin/env zsh
+
+set -e
+progress_bar_type="$1"
+
+function progress() {
+  local progress_percentage="$1"
+  local counter_part=";"
+  if [ "$progress_bar_type" = "3" ]; then
+    counter_part=""
+    progress_percentage=""
+  fi
+  printf "\x1b]9;4;%s%s%s\x07" "$progress_bar_type" "$counter_part" "$progress_percentage"
+}
+
+function cleanup() {
+  printf "\x1b]9;4;0\x07"
+}
+
+for ((counter = 0; counter < 100; counter++)); do
+  progress "$counter"
+  sleep 0.01
+done
+
+cleanup
+
