@@ -2,11 +2,20 @@
 
 set -e
 
-# prompt for password at start rather than after running user startup
-sudo -v
+log_failure() {
+  local program_name="$0"
+  local line_number="$1"
+  local line_content="$(sed -n "$line_number"p "$program_name")"
+  log-status failed "User startup failed on line $line_number: $line_content"
+}
 
-startup-user
-sudo -i startup-root
+trap 'log_failure $LINENO' ERR
+
+log-status info "Starting PM2 processes"
+source "$HOME/.nvm/nvm.sh"
+pm2 resurrect
+pm2 stop 1
+pm2 start 1
 
 echo
-log-status complete "All systems started successfully"
+log-status complete "All systems started successfully!"

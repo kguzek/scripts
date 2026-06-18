@@ -1,0 +1,16 @@
+#!/bin/sh
+
+VPN_INTERFACE="guzek-vpn-peer"
+VPN_GATEWAY_INTERNAL_IP=10.1.7.1
+
+log-status info "Starting VPN..."
+if ! sudo wg show | grep "$VPN_INTERFACE" >/dev/null; then
+  sudo wg-quick up "$VPN_INTERFACE"
+  log-status complete "VPN started!"
+else
+  log-status unchanged "VPN is already running"
+fi
+
+# ping the VPN gateway to ensure the connection is established
+# otherwise, the gateway will not be able to route traffic to the client
+ping -c 1 "$VPN_GATEWAY_INTERNAL_IP" >/dev/null
