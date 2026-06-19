@@ -1,4 +1,0 @@
-#!/bin/sh
-
-makoctl mode -t do-not-disturb >/dev/null
-makoctl mode -t default
