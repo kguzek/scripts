@@ -31,8 +31,9 @@ chmod -R g+rw $APP_DIR
 DEPLOY_COMMAND=$(log-status input 'Post-push deploy command: ')
 SETTINGS_FILE='/data/apps/Git-Auto-Deploy/config.json'
 SECRET_TOKEN=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 20 | head -n 1)
+REPO_URL="https://github.com/$REPO_OWNER/$REPO_NAME"
 NEW_REPO_ENTRY="{
-  \"url\": \"https://github.com/$REPO_OWNER/$REPO_NAME.git\",
+  \"url\": \"$REPO_URL.git\",
   \"branch\": \"main\",
   \"path\": \"$APP_DIR\",
   \"deploy\": $(jq -n --arg var "$DEPLOY_COMMAND" '$var'),
@@ -65,7 +66,9 @@ echo "$UPDATED_REPOSITORIES" >> "$TEMP_SETTINGS_FILE"
 
 mv "$TEMP_SETTINGS_FILE" "$SETTINGS_FILE"
 log-status complete "Successfully created repository CI/CD configuration"
-log-status info "Payload URL  (for GitHub webhook): $WEBHOOK_PAYLOAD_URL"
-log-status info "Secret token (for GitHub webhook): $SECRET_TOKEN"
-log-status info "Restart the Git Auto Deploy service for configuration to take effect:"
-echo "sudo systemctl restart gitautodeploy"
+WEBHOOK_SETTINGS_URL="$REPO_URL/settings/hooks/new"
+log-status info "Open the GitHub webhook configuration page: $WEBHOOK_SETTINGS_URL"
+log-status info "GitHub Webhook Payload URL: $WEBHOOK_PAYLOAD_URL"
+log-status info "GitHub Webhook Secret: $SECRET_TOKEN"
+log-status info "Restarting the Git Auto Deploy service for the updated configuration to take effect. You may be prompted for escalated privileges. After restart, create the webhook integration by following the above URL and entering the provided details, and keeping the remaining settings at their default values."
+sudo systemctl restart gitautodeploy.service
