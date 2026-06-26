@@ -19,20 +19,26 @@ api_token_help="Create a Cloudflare API token with these steps:
 10. Save the token in $env_file as CLOUDFLARE_API_TOKEN."
 
 print_usage() {
-  print -r -- "Usage: $program_name [-h|--help] COMMAND
+  local level="${1:-info}"
+  log-status "$level" "Usage: $program_name [-h|--help] COMMAND
 
 Commands:
-  tunnels                         List Cloudflare tunnels
-  routes TUNNEL                   List ingress routes for a tunnel
-  routes TUNNEL add HOST SERVICE  Add an ingress route to a tunnel
+  tunnel|tunnels                         List Cloudflare tunnels
+  route|routes TUNNEL                    List ingress routes for a tunnel
+  route|routes TUNNEL add HOST SERVICE   Add an ingress route to a tunnel
+  route|routes TUNNEL delete ROUTE       Delete an ingress route by hostname or number
 
 Tunnel matching is case-insensitive and word-based.
 
 Examples:
   $program_name tunnels
+  $program_name tunnel
   $program_name routes hp
+  $program_name route gliwice
   $program_name routes gliwice
   $program_name routes hp add xxx.guzek.uk http://localhost
+  $program_name routes hp delete xxx.guzek.uk
+  $program_name routes hp delete 2
 
 Secrets are loaded from: $env_file
 Required variables: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN"
@@ -159,14 +165,20 @@ find_tunnel() {
   if [[ "$count" == 0 ]]; then
     log-status failed "No tunnel matched: $selector"
     log-status info "Available tunnels:"
-    jq -r '.result[] | "- " + .name' <<< "$response"
+    tunnel_number=1
+    jq -r '.result[] | .name' <<< "$response" | while read -r name; do
+      log-status numbered "$tunnel_number" "$name"
+      (( tunnel_number++ ))
+    done
     exit 1
   fi
 
   if [[ "$count" != 1 ]]; then
     log-status failed "Multiple tunnels matched: $selector"
+    tunnel_number=1
     print -r -- "$matches" | while IFS=$'\t' read -r _ name; do
-      print -r -- "- $name"
+      log-status numbered "$tunnel_number" "$name"
+      (( tunnel_number++ ))
     done
     exit 1
   fi
@@ -178,7 +190,7 @@ find_tunnel() {
 
 list_routes() {
   local selector="$1"
-  local response route_count
+  local response route_count route_number
 
   find_tunnel "$selector"
 
@@ -193,13 +205,82 @@ list_routes() {
     return
   fi
 
+  route_number=1
   jq -r '
     .result.config.ingress[]?
     | select(.hostname != null)
     | .hostname + " -> " + .service
   ' <<< "$response" | while read -r route; do
-    log-status complete "$route"
+    log-status numbered "$route_number" "$route"
+    (( route_number++ ))
   done
+}
+
+delete_route() {
+  local selector="$1"
+  local route_target="$2"
+  local response route config new_config payload update_response deleted_hostname deleted_service deleted_route
+
+  find_tunnel "$selector"
+
+  response="$(cf_api GET "$(tunnel_config_path "$found_tunnel_id")")"
+  require_success "$response" "Failed to load routes for tunnel: $found_tunnel_name"
+
+  if [[ "$route_target" == <-> && "$route_target" -gt 0 ]]; then
+    deleted_route="$(jq -r --argjson route_number "$route_target" '
+      [.result.config.ingress[]? | select(.hostname != null)]
+      | .[$route_number - 1] // empty
+      | [.hostname, .service]
+      | @tsv
+    ' <<< "$response")"
+
+    if [[ -z "$deleted_route" ]]; then
+      fail "No route numbered $route_target in $found_tunnel_name"
+    fi
+
+    deleted_hostname="${deleted_route%%$'\t'*}"
+    deleted_service="${deleted_route#*$'\t'}"
+    config="$(jq '.result.config // {}' <<< "$response")"
+    new_config="$(jq --argjson route_number "$route_target" '
+      .ingress = (
+        (.ingress // []) as $ingress
+        | reduce $ingress[] as $rule (
+            {routes_seen: 0, rules: []};
+            if $rule.hostname != null then
+              .routes_seen += 1
+              | if .routes_seen == $route_number then . else .rules += [$rule] end
+            else
+              .rules += [$rule]
+            end
+          )
+        | .rules
+      )
+    ' <<< "$config")"
+  else
+    deleted_route="$(jq -r --arg hostname "$route_target" '
+      [.result.config.ingress[]? | select(.hostname == $hostname)]
+      | first // empty
+      | [.hostname, .service]
+      | @tsv
+    ' <<< "$response")"
+
+    if [[ -z "$deleted_route" ]]; then
+      fail "No route for $route_target in $found_tunnel_name"
+    fi
+
+    deleted_hostname="${deleted_route%%$'\t'*}"
+    deleted_service="${deleted_route#*$'\t'}"
+    config="$(jq '.result.config // {}' <<< "$response")"
+    new_config="$(jq --arg hostname "$route_target" '
+      .ingress = ((.ingress // []) | map(select(.hostname != $hostname)))
+    ' <<< "$config")"
+  fi
+
+  payload="$(jq -n --argjson config "$new_config" '{config: $config}')"
+  update_response="$(cf_api PUT "$(tunnel_config_path "$found_tunnel_id")" "$payload")"
+  require_success "$update_response" "Failed to delete route from tunnel: $found_tunnel_name"
+
+  log-status complete "Deleted $deleted_hostname -> $deleted_service from $found_tunnel_name"
 }
 
 add_route() {
@@ -246,58 +327,77 @@ add_route() {
 }
 
 case "${1:-}" in
-  -h|--help|'')
-    print_usage
+  -h|--help)
+    print_usage info
     exit 0
     ;;
-  tunnels)
+  '')
+    print_usage failed
+    exit 2
+    ;;
+  tunnel|tunnels)
     require_command curl
     require_command jq
     load_env
 
     if [[ $# -ne 1 ]]; then
-      print_usage
+      print_usage failed
       exit 2
     fi
     list_tunnels
     ;;
-  routes)
+  route|routes)
     require_command curl
     require_command jq
     load_env
 
     shift
     if [[ $# -lt 1 ]]; then
-      print_usage
+      print_usage failed
       exit 2
     fi
 
     selector_parts=()
-    while [[ $# -gt 0 && "$1" != add ]]; do
+    while [[ $# -gt 0 && "$1" != add && "$1" != delete && "$1" != remove ]]; do
       selector_parts+=("$1")
       shift
     done
 
     selector="${(j: :)selector_parts}"
     if [[ -z "$selector" ]]; then
-      print_usage
+      print_usage failed
       exit 2
     fi
 
-    if [[ "${1:-}" == add ]]; then
-      shift
-      if [[ $# -ne 2 ]]; then
-        print_usage
+    case "${1:-}" in
+      add)
+        shift
+        if [[ $# -ne 2 ]]; then
+          print_usage failed
+          exit 2
+        fi
+        add_route "$selector" "$1" "$2"
+        ;;
+      delete|remove)
+        shift
+        if [[ $# -ne 1 ]]; then
+          print_usage failed
+          exit 2
+        fi
+        delete_route "$selector" "$1"
+        ;;
+      '')
+        list_routes "$selector"
+        ;;
+      *)
+        print_usage failed
         exit 2
-      fi
-      add_route "$selector" "$1" "$2"
-    else
-      list_routes "$selector"
-    fi
+        ;;
+    esac
     ;;
   *)
     log-status failed "Unknown command: $1"
-    print_usage
+    print_usage failed
     exit 2
     ;;
 esac

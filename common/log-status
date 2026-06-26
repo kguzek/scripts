@@ -42,8 +42,23 @@ print_usage() {
   done
 
   echo "Usage: $script_name LEVEL MESSAGE..." >&2
+  echo "       $script_name numbered NUMBER MESSAGE..." >&2
   echo "Available levels: ${(j:, :)levels}" >&2
 }
+
+if [[ "$1" == numbered ]]; then
+  if [[ $# -lt 3 ]]; then
+    print_usage
+    exit 2
+  fi
+
+  number="$2"
+  shift 2
+  message="$*"
+
+  printf '%b[%s]%b %s\n' "$c_blue" "$number" "$c_reset" "$message"
+  exit 0
+fi
 
 if [[ $# -lt 2 || "$1" == -h || "$1" == --help ]]; then
   print_usage
