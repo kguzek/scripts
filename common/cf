@@ -26,9 +26,13 @@ Commands:
   tunnel|tunnels                         List Cloudflare tunnels
   route|routes TUNNEL                    List ingress routes for a tunnel
   route|routes TUNNEL add HOST SERVICE   Add an ingress route to a tunnel
+  route|routes TUNNEL edit ROUTE SERVICE Edit a route service by hostname or number
+  route|routes TUNNEL edit ROUTE HOST SERVICE
+                                          Edit a route hostname and service
   route|routes TUNNEL delete ROUTE       Delete an ingress route by hostname or number
 
 Tunnel matching is case-insensitive and word-based.
+Route add/edit/delete also creates, updates, or deletes matching proxied DNS CNAME records.
 
 Examples:
   $program_name tunnels
@@ -37,6 +41,8 @@ Examples:
   $program_name route gliwice
   $program_name routes gliwice
   $program_name routes hp add xxx.guzek.uk http://localhost
+  $program_name routes hp edit 2 http://localhost:3000
+  $program_name routes hp edit xxx.guzek.uk new.guzek.uk http://localhost:3000
   $program_name routes hp delete xxx.guzek.uk
   $program_name routes hp delete 2
 
@@ -112,6 +118,137 @@ tunnels_path() {
 
 tunnel_config_path() {
   printf '/accounts/%s/cfd_tunnel/%s/configurations' "$CLOUDFLARE_ACCOUNT_ID" "$1"
+}
+
+zones_path() {
+  printf '/zones?account.id=%s&per_page=100' "$CLOUDFLARE_ACCOUNT_ID"
+}
+
+dns_records_path() {
+  printf '/zones/%s/dns_records?per_page=5000' "$1"
+}
+
+dns_record_path() {
+  printf '/zones/%s/dns_records/%s' "$1" "$2"
+}
+
+tunnel_dns_target() {
+  printf '%s.cfargotunnel.com' "$found_tunnel_id"
+}
+
+find_zone_for_hostname() {
+  local hostname="$1"
+  local lookup_hostname response match
+
+  lookup_hostname="${hostname#\*.}"
+  response="$(cf_api GET "$(zones_path)")"
+  require_success "$response" "Failed to list Cloudflare zones"
+
+  match="$(jq -r --arg hostname "$lookup_hostname" '
+    ($hostname | ascii_downcase) as $host
+    | .result
+    | map(
+        . as $zone
+        | ($zone.name | ascii_downcase) as $zone_name
+        | select(($host == $zone_name) or ($host | endswith("." + $zone_name)))
+      )
+    | sort_by(.name | length)
+    | reverse
+    | first // empty
+    | [.id, .name]
+    | @tsv
+  ' <<< "$response")"
+
+  [[ -n "$match" ]] || fail "No Cloudflare zone found for $hostname"
+
+  found_zone_id="${match%%$'\t'*}"
+  found_zone_name="${match#*$'\t'}"
+}
+
+find_dns_record_for_hostname() {
+  local hostname="$1"
+  local response match
+
+  response="$(cf_api GET "$(dns_records_path "$found_zone_id")")"
+  require_success "$response" "Failed to list DNS records for $found_zone_name"
+
+  match="$(jq -r --arg hostname "$hostname" '
+    ($hostname | ascii_downcase) as $host
+    | [.result[]? | select((.name | ascii_downcase) == $host)]
+    | first // empty
+    | [.id, .type, .content, (.proxied | tostring)]
+    | @tsv
+  ' <<< "$response")"
+
+  if [[ -z "$match" ]]; then
+    found_dns_record_id=''
+    found_dns_record_type=''
+    found_dns_record_content=''
+    found_dns_record_proxied=''
+    return
+  fi
+
+  found_dns_record_id="${match%%$'\t'*}"
+  match="${match#*$'\t'}"
+  found_dns_record_type="${match%%$'\t'*}"
+  match="${match#*$'\t'}"
+  found_dns_record_content="${match%%$'\t'*}"
+  found_dns_record_proxied="${match#*$'\t'}"
+}
+
+upsert_dns_record() {
+  local hostname="$1"
+  local target payload response
+
+  find_zone_for_hostname "$hostname"
+  find_dns_record_for_hostname "$hostname"
+
+  target="$(tunnel_dns_target)"
+  payload="$(jq -n --arg name "$hostname" --arg content "$target" '{type: "CNAME", name: $name, content: $content, proxied: true, ttl: 1}')"
+
+  if [[ -z "$found_dns_record_id" ]]; then
+    response="$(cf_api POST "$(dns_records_path "$found_zone_id")" "$payload")"
+    require_success "$response" "Failed to create DNS record for $hostname"
+    log-status complete "Created DNS $hostname -> $target"
+    return
+  fi
+
+  if [[ "$found_dns_record_type" != CNAME ]]; then
+    fail "DNS record for $hostname already exists as $found_dns_record_type; refusing to replace it"
+  fi
+
+  if [[ "$found_dns_record_content" == "$target" && "$found_dns_record_proxied" == true ]]; then
+    log-status unchanged "DNS already points $hostname -> $target"
+    return
+  fi
+
+  response="$(cf_api PUT "$(dns_record_path "$found_zone_id" "$found_dns_record_id")" "$payload")"
+  require_success "$response" "Failed to update DNS record for $hostname"
+  log-status complete "Updated DNS $hostname -> $target"
+}
+
+delete_dns_record() {
+  local hostname="$1"
+  local target response
+
+  find_zone_for_hostname "$hostname"
+  find_dns_record_for_hostname "$hostname"
+
+  if [[ -z "$found_dns_record_id" ]]; then
+    log-status warn "No DNS record found for $hostname"
+    return
+  fi
+
+  target="$(tunnel_dns_target)"
+
+  if [[ "$found_dns_record_type" != CNAME || "$found_dns_record_content" != "$target" ]]; then
+    log-status warn "DNS record for $hostname does not point to $target; leaving it unchanged"
+    return
+  fi
+
+  response="$(cf_api DELETE "$(dns_record_path "$found_zone_id" "$found_dns_record_id")")"
+  require_success "$response" "Failed to delete DNS record for $hostname"
+  log-status complete "Deleted DNS $hostname -> $target"
 }
 
 list_tunnels() {
@@ -280,7 +417,104 @@ delete_route() {
   update_response="$(cf_api PUT "$(tunnel_config_path "$found_tunnel_id")" "$payload")"
   require_success "$update_response" "Failed to delete route from tunnel: $found_tunnel_name"
 
+  delete_dns_record "$deleted_hostname"
+
   log-status complete "Deleted $deleted_hostname -> $deleted_service from $found_tunnel_name"
+}
+
+edit_route() {
+  local selector="$1"
+  local route_target="$2"
+  local new_hostname="$3"
+  local new_service="$4"
+  local response config new_config payload update_response existing_route existing_hostname existing_service duplicate
+
+  find_tunnel "$selector"
+
+  response="$(cf_api GET "$(tunnel_config_path "$found_tunnel_id")")"
+  require_success "$response" "Failed to load routes for tunnel: $found_tunnel_name"
+
+  if [[ "$route_target" == <-> && "$route_target" -gt 0 ]]; then
+    existing_route="$(jq -r --argjson route_number "$route_target" '
+      [.result.config.ingress[]? | select(.hostname != null)]
+      | .[$route_number - 1] // empty
+      | [.hostname, .service]
+      | @tsv
+    ' <<< "$response")"
+  else
+    existing_route="$(jq -r --arg hostname "$route_target" '
+      [.result.config.ingress[]? | select(.hostname == $hostname)]
+      | first // empty
+      | [.hostname, .service]
+      | @tsv
+    ' <<< "$response")"
+  fi
+
+  if [[ -z "$existing_route" ]]; then
+    if [[ "$route_target" == <-> && "$route_target" -gt 0 ]]; then
+      fail "No route numbered $route_target in $found_tunnel_name"
+    else
+      fail "No route for $route_target in $found_tunnel_name"
+    fi
+  fi
+
+  existing_hostname="${existing_route%%$'\t'*}"
+  existing_service="${existing_route#*$'\t'}"
+
+  if [[ -z "$new_hostname" ]]; then
+    new_hostname="$existing_hostname"
+  fi
+
+  if [[ "$new_hostname" != "$existing_hostname" ]]; then
+    duplicate="$(jq -r --arg hostname "$new_hostname" --arg existing_hostname "$existing_hostname" '
+      any(.result.config.ingress[]?; .hostname == $hostname and .hostname != $existing_hostname)
+    ' <<< "$response")"
+
+    if [[ "$duplicate" == true ]]; then
+      fail "Route already exists for $new_hostname in $found_tunnel_name"
+    fi
+  fi
+
+  config="$(jq '.result.config // {}' <<< "$response")"
+
+  if [[ "$route_target" == <-> && "$route_target" -gt 0 ]]; then
+    new_config="$(jq --argjson route_number "$route_target" --arg hostname "$new_hostname" --arg service "$new_service" '
+      .ingress = (
+        (.ingress // []) as $ingress
+        | reduce $ingress[] as $rule (
+            {routes_seen: 0, rules: []};
+            if $rule.hostname != null then
+              .routes_seen += 1
+              | if .routes_seen == $route_number then
+                  .rules += [$rule + {hostname: $hostname, service: $service}]
+                else
+                  .rules += [$rule]
+                end
+            else
+              .rules += [$rule]
+            end
+          )
+        | .rules
+      )
+    ' <<< "$config")"
+  else
+    new_config="$(jq --arg target_hostname "$route_target" --arg hostname "$new_hostname" --arg service "$new_service" '
+      .ingress = ((.ingress // []) | map(if .hostname == $target_hostname then . + {hostname: $hostname, service: $service} else . end))
+    ' <<< "$config")"
+  fi
+
+  payload="$(jq -n --argjson config "$new_config" '{config: $config}')"
+  update_response="$(cf_api PUT "$(tunnel_config_path "$found_tunnel_id")" "$payload")"
+  require_success "$update_response" "Failed to edit route in tunnel: $found_tunnel_name"
+
+  if [[ "$new_hostname" != "$existing_hostname" ]]; then
+    delete_dns_record "$existing_hostname"
+    upsert_dns_record "$new_hostname"
+  else
+    upsert_dns_record "$new_hostname"
+  fi
+
+  log-status complete "Edited $existing_hostname -> $existing_service to $new_hostname -> $new_service in $found_tunnel_name"
 }
 
 add_route() {
@@ -323,6 +557,8 @@ add_route() {
   update_response="$(cf_api PUT "$(tunnel_config_path "$found_tunnel_id")" "$payload")"
   require_success "$update_response" "Failed to add route to tunnel: $found_tunnel_name"
 
+  upsert_dns_record "$hostname"
+
   log-status complete "Added $hostname -> $service to $found_tunnel_name"
 }
 
@@ -358,7 +594,7 @@ case "${1:-}" in
     fi
 
     selector_parts=()
-    while [[ $# -gt 0 && "$1" != add && "$1" != delete && "$1" != remove ]]; do
+    while [[ $# -gt 0 && "$1" != add && "$1" != edit && "$1" != delete && "$1" != remove ]]; do
       selector_parts+=("$1")
       shift
     done
@@ -377,6 +613,17 @@ case "${1:-}" in
           exit 2
         fi
         add_route "$selector" "$1" "$2"
+        ;;
+      edit)
+        shift
+        if [[ $# -eq 2 ]]; then
+          edit_route "$selector" "$1" "" "$2"
+        elif [[ $# -eq 3 ]]; then
+          edit_route "$selector" "$1" "$2" "$3"
+        else
+          print_usage failed
+          exit 2
+        fi
         ;;
       delete|remove)
         shift
