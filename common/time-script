@@ -3,7 +3,7 @@
 set -e
 program_name="${0:t}"
 
-START_TIME_FILE_PATH='/tmp/time-script/start-time.txt'
+START_TIME_FILE_PATH='/tmp/scripts/time-script-lock.txt'
 
 if ! zmodload zsh/datetime; then
   log-status failed "$program_name: failed to load zsh/datetime"
