@@ -1,0 +1,303 @@
+#!/usr/bin/env zsh
+
+set -e
+
+program_name="${0:t}"
+script_dir="${0:A:h}"
+env_file="${script_dir:h}/cloudflare.env"
+
+api_token_help="Create a Cloudflare API token with these steps:
+1. Open dash.cloudflare.com.
+2. Expand 'Manage account' in the sidebar.
+3. Open 'Account API tokens'.
+4. Create a new token and give it a clear name, such as 'cf script'.
+5. For the first policy, keep the scope set to 'Entire Account'.
+6. Add 'Cloudflare One / Zero Trust' > 'Cloudflare One Connector: cloudflared' with Read and Edit permissions.
+7. Add another policy at the bottom.
+8. Change the new policy scope to 'All Domains'.
+9. Add 'DNS & Zones' > 'DNS' with Read and Edit permissions.
+10. Save the token in $env_file as CLOUDFLARE_API_TOKEN."
+
+print_usage() {
+  print -r -- "Usage: $program_name [-h|--help] COMMAND
+
+Commands:
+  tunnels                         List Cloudflare tunnels
+  routes TUNNEL                   List ingress routes for a tunnel
+  routes TUNNEL add HOST SERVICE  Add an ingress route to a tunnel
+
+Tunnel matching is case-insensitive and word-based.
+
+Examples:
+  $program_name tunnels
+  $program_name routes hp
+  $program_name routes gliwice
+  $program_name routes hp add xxx.guzek.uk http://localhost
+
+Secrets are loaded from: $env_file
+Required variables: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN"
+}
+
+fail() {
+  log-status failed "$*"
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
+}
+
+load_env() {
+  [[ -f "$env_file" ]] || fail "Missing secrets file: $env_file"
+  source "$env_file"
+
+  [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] || fail "Missing CLOUDFLARE_ACCOUNT_ID in $env_file"
+  if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    log-status failed "Missing CLOUDFLARE_API_TOKEN in $env_file"
+    log-status info "$api_token_help"
+    exit 1
+  fi
+}
+
+cf_api() {
+  local method="$1"
+  local api_path="$2"
+  local data="${3:-}"
+  local response http_status body
+  local args=(
+    -sS
+    -X "$method"
+    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+    -H "Content-Type: application/json"
+    -w $'\n%{http_code}'
+  )
+
+  if [[ -n "$data" ]]; then
+    args+=(--data "$data")
+  fi
+
+  response="$(curl "${args[@]}" "https://api.cloudflare.com/client/v4$api_path")"
+  http_status="${response##*$'\n'}"
+  body="${response%$'\n'$http_status}"
+
+  if [[ "$http_status" == 401 || "$http_status" == 403 ]]; then
+    log-status failed "Cloudflare API returned HTTP $http_status"
+    log-status info "$api_token_help"
+    exit 1
+  fi
+
+  print -r -- "$body"
+}
+
+require_success() {
+  local response="$1"
+  local message="$2"
+
+  if ! jq -e '.success == true' >/dev/null <<< "$response"; then
+    log-status failed "$message"
+    jq -r '.errors[]? | "- " + (.message // "unknown error")' >&2 <<< "$response"
+    exit 1
+  fi
+}
+
+tunnels_path() {
+  printf '/accounts/%s/cfd_tunnel?is_deleted=false&per_page=100' "$CLOUDFLARE_ACCOUNT_ID"
+}
+
+tunnel_config_path() {
+  printf '/accounts/%s/cfd_tunnel/%s/configurations' "$CLOUDFLARE_ACCOUNT_ID" "$1"
+}
+
+list_tunnels() {
+  local response
+  response="$(cf_api GET "$(tunnels_path)")"
+  require_success "$response" "Failed to list Cloudflare tunnels"
+
+  if [[ "$(jq '.result | length' <<< "$response")" == 0 ]]; then
+    log-status info "No Cloudflare tunnels found"
+    return
+  fi
+
+  log-status info "List of Cloudflare tunnels:"
+  jq -r '.result[] | [.name, (.status // "unknown"), .id] | @tsv' <<< "$response" | while IFS=$'\t' read -r name tunnel_status id; do
+    if [[ "$tunnel_status" == healthy ]]; then
+      log-status complete "$name [$tunnel_status] $id"
+    else
+      log-status failed "$name [$tunnel_status] $id"
+    fi
+  done
+}
+
+find_tunnel() {
+  local selector="$1"
+  local response matches count match
+  local -a match_lines
+
+  response="$(cf_api GET "$(tunnels_path)")"
+  require_success "$response" "Failed to list Cloudflare tunnels"
+
+  matches="$(jq -r --arg query "$selector" '
+    def words: ascii_downcase | gsub("[^[:alnum:]]+"; " ") | split(" ") | map(select(length > 0));
+
+    ($query | words) as $query_words
+    | .result
+    | map(select(
+        (.name | words) as $name_words
+        | all($query_words[]; . as $query_word | any($name_words[]; . == $query_word))
+      ))
+    | .[]
+    | [.id, .name] | @tsv
+  ' <<< "$response")"
+
+  if [[ -z "$matches" ]]; then
+    count=0
+  else
+    match_lines=("${(@f)matches}")
+    count="${#match_lines}"
+  fi
+
+  if [[ "$count" == 0 ]]; then
+    log-status failed "No tunnel matched: $selector"
+    log-status info "Available tunnels:"
+    jq -r '.result[] | "- " + .name' <<< "$response"
+    exit 1
+  fi
+
+  if [[ "$count" != 1 ]]; then
+    log-status failed "Multiple tunnels matched: $selector"
+    print -r -- "$matches" | while IFS=$'\t' read -r _ name; do
+      print -r -- "- $name"
+    done
+    exit 1
+  fi
+
+  match="$matches"
+  found_tunnel_id="${match%%$'\t'*}"
+  found_tunnel_name="${match#*$'\t'}"
+}
+
+list_routes() {
+  local selector="$1"
+  local response route_count
+
+  find_tunnel "$selector"
+
+  response="$(cf_api GET "$(tunnel_config_path "$found_tunnel_id")")"
+  require_success "$response" "Failed to load routes for tunnel: $found_tunnel_name"
+
+  route_count="$(jq '[.result.config.ingress[]? | select(.hostname != null)] | length' <<< "$response")"
+  log-status info "Routes for $found_tunnel_name:"
+
+  if [[ "$route_count" == 0 ]]; then
+    log-status failed "No hostname routes configured"
+    return
+  fi
+
+  jq -r '
+    .result.config.ingress[]?
+    | select(.hostname != null)
+    | .hostname + " -> " + .service
+  ' <<< "$response" | while read -r route; do
+    log-status complete "$route"
+  done
+}
+
+add_route() {
+  local selector="$1"
+  local hostname="$2"
+  local service="$3"
+  local response duplicate config new_config payload update_response
+
+  find_tunnel "$selector"
+
+  response="$(cf_api GET "$(tunnel_config_path "$found_tunnel_id")")"
+  require_success "$response" "Failed to load routes for tunnel: $found_tunnel_name"
+
+  duplicate="$(jq -r --arg hostname "$hostname" '
+    any(.result.config.ingress[]?; .hostname == $hostname)
+  ' <<< "$response")"
+
+  if [[ "$duplicate" == true ]]; then
+    fail "Route already exists for $hostname in $found_tunnel_name"
+  fi
+
+  config="$(jq '.result.config // {}' <<< "$response")"
+  new_config="$(jq --arg hostname "$hostname" --arg service "$service" '
+    .ingress = (
+      (.ingress // []) as $ingress
+      | {hostname: $hostname, service: $service} as $new_route
+      | (reduce range(0; ($ingress | length)) as $i (
+          null;
+          if . == null and ($ingress[$i].hostname == null and $ingress[$i].path == null) then $i else . end
+        )) as $fallback_index
+      | if $fallback_index == null then
+          $ingress + [$new_route]
+        else
+          $ingress[0:$fallback_index] + [$new_route] + $ingress[$fallback_index:]
+        end
+    )
+  ' <<< "$config")"
+  payload="$(jq -n --argjson config "$new_config" '{config: $config}')"
+
+  update_response="$(cf_api PUT "$(tunnel_config_path "$found_tunnel_id")" "$payload")"
+  require_success "$update_response" "Failed to add route to tunnel: $found_tunnel_name"
+
+  log-status complete "Added $hostname -> $service to $found_tunnel_name"
+}
+
+case "${1:-}" in
+  -h|--help|'')
+    print_usage
+    exit 0
+    ;;
+  tunnels)
+    require_command curl
+    require_command jq
+    load_env
+
+    if [[ $# -ne 1 ]]; then
+      print_usage
+      exit 2
+    fi
+    list_tunnels
+    ;;
+  routes)
+    require_command curl
+    require_command jq
+    load_env
+
+    shift
+    if [[ $# -lt 1 ]]; then
+      print_usage
+      exit 2
+    fi
+
+    selector_parts=()
+    while [[ $# -gt 0 && "$1" != add ]]; do
+      selector_parts+=("$1")
+      shift
+    done
+
+    selector="${(j: :)selector_parts}"
+    if [[ -z "$selector" ]]; then
+      print_usage
+      exit 2
+    fi
+
+    if [[ "${1:-}" == add ]]; then
+      shift
+      if [[ $# -ne 2 ]]; then
+        print_usage
+        exit 2
+      fi
+      add_route "$selector" "$1" "$2"
+    else
+      list_routes "$selector"
+    fi
+    ;;
+  *)
+    log-status failed "Unknown command: $1"
+    print_usage
+    exit 2
+    ;;
+esac
