@@ -33,6 +33,7 @@ Commands:
 
 Tunnel matching is case-insensitive and word-based.
 Route add/edit/delete also creates, updates, or deletes matching proxied DNS CNAME records.
+Route config and numbering are cached for 10 minutes in /tmp/scripts/cf-routes-<tunnel-id>.json.
 
 Examples:
   $program_name tunnels
@@ -134,6 +135,106 @@ dns_record_path() {
 
 tunnel_dns_target() {
   printf '%s.cfargotunnel.com' "$found_tunnel_id"
+}
+
+route_cache_path() {
+  printf '/tmp/scripts/cf-routes-%s.json' "$found_tunnel_id"
+}
+
+write_route_cache_from_config() {
+  local config="$1"
+  local cache_file now
+
+  mkdir -p /tmp/scripts
+  zmodload zsh/datetime 2>/dev/null || true
+  now="${EPOCHSECONDS:-0}"
+  cache_file="$(route_cache_path)"
+
+  jq -n \
+    --arg tunnel_id "$found_tunnel_id" \
+    --arg tunnel_name "$found_tunnel_name" \
+    --argjson generated_at "$now" \
+    --argjson config "$config" '
+      {
+        tunnel_id: $tunnel_id,
+        tunnel_name: $tunnel_name,
+        generated_at: $generated_at,
+        config: $config,
+        routes: (
+          [$config.ingress[]? | select(.hostname != null)]
+          | to_entries
+          | map({number: (.key + 1), hostname: .value.hostname, service: .value.service})
+        )
+      }
+    ' > "$cache_file"
+}
+
+write_route_cache() {
+  local response="$1"
+  local config
+
+  config="$(jq '.result.config // {}' <<< "$response")"
+  write_route_cache_from_config "$config"
+}
+
+is_route_cache_fresh() {
+  local cache_file="$1"
+  local now mtime
+  local -A cache_stat
+
+  [[ -f "$cache_file" ]] || return 1
+  zmodload zsh/stat zsh/datetime 2>/dev/null || return 1
+  zstat -H cache_stat -- "$cache_file" || return 1
+
+  now="$EPOCHSECONDS"
+  mtime="$cache_stat[mtime]"
+
+  (( now - mtime <= 600 ))
+}
+
+resolve_cached_route_number() {
+  local route_number="$1"
+  local cache_file route
+
+  cache_file="$(route_cache_path)"
+  is_route_cache_fresh "$cache_file" || return 1
+  jq -e '.config.ingress | type == "array"' "$cache_file" >/dev/null || return 1
+
+  cached_config="$(jq '.config // {}' "$cache_file")"
+  route="$(jq -r --argjson route_number "$route_number" '
+    .routes[]?
+    | select(.number == $route_number)
+    | [.hostname, .service]
+    | @tsv
+  ' "$cache_file")"
+
+  if [[ -z "$route" ]]; then
+    fail "No route numbered $route_number in cached routes for $found_tunnel_name; run '$program_name routes $found_tunnel_name' to refresh"
+  fi
+
+  cached_route_hostname="${route%%$'\t'*}"
+  cached_route_service="${route#*$'\t'}"
+  log-status unchanged "Using cached route [$route_number] $cached_route_hostname -> $cached_route_service"
+  return 0
+}
+
+load_cached_config() {
+  local cache_file
+
+  cache_file="$(route_cache_path)"
+  is_route_cache_fresh "$cache_file" || return 1
+  jq -e '.config.ingress | type == "array"' "$cache_file" >/dev/null || return 1
+
+  cached_config="$(jq '.config // {}' "$cache_file")"
+  return 0
+}
+
+require_cached_config() {
+  if load_cached_config; then
+    return
+  fi
+
+  fail "Route cache is missing or older than 10 minutes for $found_tunnel_name; run '$program_name routes $found_tunnel_name' first"
 }
 
 find_zone_for_hostname() {
@@ -333,6 +434,7 @@ list_routes() {
 
   response="$(cf_api GET "$(tunnel_config_path "$found_tunnel_id")")"
   require_success "$response" "Failed to load routes for tunnel: $found_tunnel_name"
+  write_route_cache "$response"
 
   route_count="$(jq '[.result.config.ingress[]? | select(.hostname != null)] | length' <<< "$response")"
   log-status info "Routes for $found_tunnel_name:"
@@ -356,20 +458,23 @@ list_routes() {
 delete_route() {
   local selector="$1"
   local route_target="$2"
-  local response route config new_config payload update_response deleted_hostname deleted_service deleted_route
+  local config new_config payload update_response deleted_hostname deleted_service deleted_route
 
   find_tunnel "$selector"
+  require_cached_config
+  config="$cached_config"
 
-  response="$(cf_api GET "$(tunnel_config_path "$found_tunnel_id")")"
-  require_success "$response" "Failed to load routes for tunnel: $found_tunnel_name"
+  if [[ "$route_target" == <-> && "$route_target" -gt 0 ]] && resolve_cached_route_number "$route_target"; then
+    route_target="$cached_route_hostname"
+  fi
 
   if [[ "$route_target" == <-> && "$route_target" -gt 0 ]]; then
     deleted_route="$(jq -r --argjson route_number "$route_target" '
-      [.result.config.ingress[]? | select(.hostname != null)]
+      [.ingress[]? | select(.hostname != null)]
       | .[$route_number - 1] // empty
       | [.hostname, .service]
       | @tsv
-    ' <<< "$response")"
+    ' <<< "$config")"
 
     if [[ -z "$deleted_route" ]]; then
       fail "No route numbered $route_target in $found_tunnel_name"
@@ -377,7 +482,6 @@ delete_route() {
 
     deleted_hostname="${deleted_route%%$'\t'*}"
     deleted_service="${deleted_route#*$'\t'}"
-    config="$(jq '.result.config // {}' <<< "$response")"
     new_config="$(jq --argjson route_number "$route_target" '
       .ingress = (
         (.ingress // []) as $ingress
@@ -395,11 +499,11 @@ delete_route() {
     ' <<< "$config")"
   else
     deleted_route="$(jq -r --arg hostname "$route_target" '
-      [.result.config.ingress[]? | select(.hostname == $hostname)]
+      [.ingress[]? | select(.hostname == $hostname)]
       | first // empty
       | [.hostname, .service]
       | @tsv
-    ' <<< "$response")"
+    ' <<< "$config")"
 
     if [[ -z "$deleted_route" ]]; then
       fail "No route for $route_target in $found_tunnel_name"
@@ -407,7 +511,6 @@ delete_route() {
 
     deleted_hostname="${deleted_route%%$'\t'*}"
     deleted_service="${deleted_route#*$'\t'}"
-    config="$(jq '.result.config // {}' <<< "$response")"
     new_config="$(jq --arg hostname "$route_target" '
       .ingress = ((.ingress // []) | map(select(.hostname != $hostname)))
     ' <<< "$config")"
@@ -416,6 +519,7 @@ delete_route() {
   payload="$(jq -n --argjson config "$new_config" '{config: $config}')"
   update_response="$(cf_api PUT "$(tunnel_config_path "$found_tunnel_id")" "$payload")"
   require_success "$update_response" "Failed to delete route from tunnel: $found_tunnel_name"
+  write_route_cache_from_config "$new_config"
 
   delete_dns_record "$deleted_hostname"
 
@@ -427,27 +531,30 @@ edit_route() {
   local route_target="$2"
   local new_hostname="$3"
   local new_service="$4"
-  local response config new_config payload update_response existing_route existing_hostname existing_service duplicate
+  local config new_config payload update_response existing_route existing_hostname existing_service duplicate
 
   find_tunnel "$selector"
+  require_cached_config
+  config="$cached_config"
 
-  response="$(cf_api GET "$(tunnel_config_path "$found_tunnel_id")")"
-  require_success "$response" "Failed to load routes for tunnel: $found_tunnel_name"
+  if [[ "$route_target" == <-> && "$route_target" -gt 0 ]] && resolve_cached_route_number "$route_target"; then
+    route_target="$cached_route_hostname"
+  fi
 
   if [[ "$route_target" == <-> && "$route_target" -gt 0 ]]; then
     existing_route="$(jq -r --argjson route_number "$route_target" '
-      [.result.config.ingress[]? | select(.hostname != null)]
+      [.ingress[]? | select(.hostname != null)]
       | .[$route_number - 1] // empty
       | [.hostname, .service]
       | @tsv
-    ' <<< "$response")"
+    ' <<< "$config")"
   else
     existing_route="$(jq -r --arg hostname "$route_target" '
-      [.result.config.ingress[]? | select(.hostname == $hostname)]
+      [.ingress[]? | select(.hostname == $hostname)]
       | first // empty
       | [.hostname, .service]
       | @tsv
-    ' <<< "$response")"
+    ' <<< "$config")"
   fi
 
   if [[ -z "$existing_route" ]]; then
@@ -467,15 +574,13 @@ edit_route() {
 
   if [[ "$new_hostname" != "$existing_hostname" ]]; then
     duplicate="$(jq -r --arg hostname "$new_hostname" --arg existing_hostname "$existing_hostname" '
-      any(.result.config.ingress[]?; .hostname == $hostname and .hostname != $existing_hostname)
-    ' <<< "$response")"
+      any(.ingress[]?; .hostname == $hostname and .hostname != $existing_hostname)
+    ' <<< "$config")"
 
     if [[ "$duplicate" == true ]]; then
       fail "Route already exists for $new_hostname in $found_tunnel_name"
     fi
   fi
-
-  config="$(jq '.result.config // {}' <<< "$response")"
 
   if [[ "$route_target" == <-> && "$route_target" -gt 0 ]]; then
     new_config="$(jq --argjson route_number "$route_target" --arg hostname "$new_hostname" --arg service "$new_service" '
@@ -506,6 +611,7 @@ edit_route() {
   payload="$(jq -n --argjson config "$new_config" '{config: $config}')"
   update_response="$(cf_api PUT "$(tunnel_config_path "$found_tunnel_id")" "$payload")"
   require_success "$update_response" "Failed to edit route in tunnel: $found_tunnel_name"
+  write_route_cache_from_config "$new_config"
 
   if [[ "$new_hostname" != "$existing_hostname" ]]; then
     delete_dns_record "$existing_hostname"
@@ -521,22 +627,20 @@ add_route() {
   local selector="$1"
   local hostname="$2"
   local service="$3"
-  local response duplicate config new_config payload update_response
+  local duplicate config new_config payload update_response
 
   find_tunnel "$selector"
-
-  response="$(cf_api GET "$(tunnel_config_path "$found_tunnel_id")")"
-  require_success "$response" "Failed to load routes for tunnel: $found_tunnel_name"
+  require_cached_config
+  config="$cached_config"
 
   duplicate="$(jq -r --arg hostname "$hostname" '
-    any(.result.config.ingress[]?; .hostname == $hostname)
-  ' <<< "$response")"
+    any(.ingress[]?; .hostname == $hostname)
+  ' <<< "$config")"
 
   if [[ "$duplicate" == true ]]; then
     fail "Route already exists for $hostname in $found_tunnel_name"
   fi
 
-  config="$(jq '.result.config // {}' <<< "$response")"
   new_config="$(jq --arg hostname "$hostname" --arg service "$service" '
     .ingress = (
       (.ingress // []) as $ingress
@@ -556,6 +660,7 @@ add_route() {
 
   update_response="$(cf_api PUT "$(tunnel_config_path "$found_tunnel_id")" "$payload")"
   require_success "$update_response" "Failed to add route to tunnel: $found_tunnel_name"
+  write_route_cache_from_config "$new_config"
 
   upsert_dns_record "$hostname"
 
