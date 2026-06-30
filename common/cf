@@ -7,7 +7,7 @@ script_dir="${0:A:h}"
 env_file="${script_dir:h}/cloudflare.env"
 
 api_token_help="Create a Cloudflare API token with these steps:
-1. Open dash.cloudflare.com.
+1. Open https://dash.cloudflare.com.
 2. Expand 'Manage account' in the sidebar.
 3. Open 'Account API tokens'.
 4. Create a new token and give it a clear name, such as 'cf script'.
@@ -67,16 +67,19 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
 
+fail_missing_envs() {
+  local missing_env="$1"
+  log-status failed "Missing $missing_env in $env_file"
+  log-status info "$api_token_help"
+  exit 1
+}
+
 load_env() {
   [[ -f "$env_file" ]] || fail "Missing secrets file: $env_file"
   source "$env_file"
 
-  [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] || fail "Missing CLOUDFLARE_ACCOUNT_ID in $env_file"
-  if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-    log-status failed "Missing CLOUDFLARE_API_TOKEN in $env_file"
-    log-status info "$api_token_help"
-    exit 1
-  fi
+  [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] || fail_missing_envs "CLOUDFLARE_ACCOUNT_ID"
+  [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || fail_missing_envs "CLOUDFLARE_API_TOKEN"
 }
 
 cf_api() {
