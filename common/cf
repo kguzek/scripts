@@ -30,6 +30,9 @@ Commands:
   route|routes TUNNEL edit ROUTE HOST SERVICE
                                           Edit a route hostname and service
   route|routes TUNNEL delete ROUTE       Delete an ingress route by hostname or number
+  dns add NAME [--type TYPE] TARGET      Add a DNS record, default type A
+  dns edit NAME [--type TYPE] TARGET     Edit a DNS record content and type
+  dns delete|remove NAME                 Delete a DNS record
 
 Tunnel matching is case-insensitive and word-based.
 Route add/edit/delete also creates, updates, or deletes matching proxied DNS CNAME records.
@@ -46,6 +49,10 @@ Examples:
   $program_name routes hp edit xxx.guzek.uk new.guzek.uk http://localhost:3000
   $program_name routes hp delete xxx.guzek.uk
   $program_name routes hp delete 2
+  $program_name dns add a.example.com 192.168.0.1
+  $program_name dns add b.example.com --type cname a.example.com
+  $program_name dns edit a.example.com 192.168.0.2
+  $program_name dns remove b.example.com
 
 Secrets are loaded from: $env_file
 Required variables: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN"
@@ -297,20 +304,74 @@ find_dns_record_for_hostname() {
   found_dns_record_proxied="${match#*$'\t'}"
 }
 
+normalize_dns_type() {
+  local type="$1"
+
+  print -r -- "${type:u}"
+}
+
+dns_record_payload() {
+  local hostname="$1"
+  local type="$2"
+  local target="$3"
+  local proxied="${4:-}"
+
+  if [[ -n "$proxied" ]]; then
+    jq -n --arg type "$type" --arg name "$hostname" --arg content "$target" --argjson proxied "$proxied" \
+      '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: 1}'
+  else
+    jq -n --arg type "$type" --arg name "$hostname" --arg content "$target" \
+      '{type: $type, name: $name, content: $content, ttl: 1}'
+  fi
+}
+
+create_dns_record() {
+  local hostname="$1"
+  local type="$2"
+  local target="$3"
+  local proxied="${4:-}"
+  local payload response
+
+  payload="$(dns_record_payload "$hostname" "$type" "$target" "$proxied")"
+  response="$(cf_api POST "$(dns_records_path "$found_zone_id")" "$payload")"
+  require_success "$response" "Failed to create DNS record for $hostname"
+  log-status complete "Created DNS $hostname -> $target"
+}
+
+update_dns_record() {
+  local hostname="$1"
+  local type="$2"
+  local target="$3"
+  local proxied="${4:-}"
+  local payload response
+
+  payload="$(dns_record_payload "$hostname" "$type" "$target" "$proxied")"
+  response="$(cf_api PUT "$(dns_record_path "$found_zone_id" "$found_dns_record_id")" "$payload")"
+  require_success "$response" "Failed to update DNS record for $hostname"
+  log-status complete "Updated DNS $hostname -> $target"
+}
+
+remove_found_dns_record() {
+  local hostname="$1"
+  local target="$2"
+  local response
+
+  response="$(cf_api DELETE "$(dns_record_path "$found_zone_id" "$found_dns_record_id")")"
+  require_success "$response" "Failed to delete DNS record for $hostname"
+  log-status complete "Deleted DNS $hostname -> $target"
+}
+
 upsert_dns_record() {
   local hostname="$1"
-  local target payload response
+  local target
 
   find_zone_for_hostname "$hostname"
   find_dns_record_for_hostname "$hostname"
 
   target="$(tunnel_dns_target)"
-  payload="$(jq -n --arg name "$hostname" --arg content "$target" '{type: "CNAME", name: $name, content: $content, proxied: true, ttl: 1}')"
 
   if [[ -z "$found_dns_record_id" ]]; then
-    response="$(cf_api POST "$(dns_records_path "$found_zone_id")" "$payload")"
-    require_success "$response" "Failed to create DNS record for $hostname"
-    log-status complete "Created DNS $hostname -> $target"
+    create_dns_record "$hostname" CNAME "$target" true
     return
   fi
 
@@ -323,14 +384,12 @@ upsert_dns_record() {
     return
   fi
 
-  response="$(cf_api PUT "$(dns_record_path "$found_zone_id" "$found_dns_record_id")" "$payload")"
-  require_success "$response" "Failed to update DNS record for $hostname"
-  log-status complete "Updated DNS $hostname -> $target"
+  update_dns_record "$hostname" CNAME "$target" true
 }
 
 delete_dns_record() {
   local hostname="$1"
-  local target response
+  local target
 
   find_zone_for_hostname "$hostname"
   find_dns_record_for_hostname "$hostname"
@@ -347,9 +406,81 @@ delete_dns_record() {
     return
   fi
 
-  response="$(cf_api DELETE "$(dns_record_path "$found_zone_id" "$found_dns_record_id")")"
-  require_success "$response" "Failed to delete DNS record for $hostname"
-  log-status complete "Deleted DNS $hostname -> $target"
+  remove_found_dns_record "$hostname" "$target"
+}
+
+add_dns_record() {
+  local hostname="$1"
+  local type="$2"
+  local target="$3"
+
+  find_zone_for_hostname "$hostname"
+  find_dns_record_for_hostname "$hostname"
+
+  if [[ -n "$found_dns_record_id" ]]; then
+    fail "DNS record already exists for $hostname in $found_zone_name"
+  fi
+
+  create_dns_record "$hostname" "$type" "$target"
+}
+
+edit_dns_record() {
+  local hostname="$1"
+  local type="$2"
+  local target="$3"
+
+  find_zone_for_hostname "$hostname"
+  find_dns_record_for_hostname "$hostname"
+
+  if [[ -z "$found_dns_record_id" ]]; then
+    fail "No DNS record for $hostname in $found_zone_name"
+  fi
+
+  update_dns_record "$hostname" "$type" "$target"
+}
+
+delete_any_dns_record() {
+  local hostname="$1"
+
+  find_zone_for_hostname "$hostname"
+  find_dns_record_for_hostname "$hostname"
+
+  if [[ -z "$found_dns_record_id" ]]; then
+    fail "No DNS record for $hostname in $found_zone_name"
+  fi
+
+  remove_found_dns_record "$hostname" "$found_dns_record_content"
+}
+
+parse_dns_record_args() {
+  local type="A"
+  local option
+  parsed_dns_args=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --type)
+        shift
+        [[ $# -gt 0 ]] || return 2
+        type="$1"
+        [[ "$type" != --* ]] || return 2
+        ;;
+      --type=*)
+        option="$1"
+        type="${option#--type=}"
+        [[ -n "$type" && "$type" != --* ]] || return 2
+        ;;
+      --*)
+        return 2
+        ;;
+      *)
+        parsed_dns_args+=("$1")
+        ;;
+    esac
+    shift
+  done
+
+  parsed_dns_type="$(normalize_dns_type "$type")"
 }
 
 list_tunnels() {
@@ -686,6 +817,43 @@ case "${1:-}" in
       exit 2
     fi
     list_tunnels
+    ;;
+  dns)
+    require_command curl
+    require_command jq
+    load_env
+
+    shift
+    case "${1:-}" in
+      add)
+        shift
+        if ! parse_dns_record_args "$@" || [[ "${#parsed_dns_args[@]}" -ne 2 ]]; then
+          print_usage failed
+          exit 2
+        fi
+        add_dns_record "$parsed_dns_args[1]" "$parsed_dns_type" "$parsed_dns_args[2]"
+        ;;
+      edit)
+        shift
+        if ! parse_dns_record_args "$@" || [[ "${#parsed_dns_args[@]}" -ne 2 ]]; then
+          print_usage failed
+          exit 2
+        fi
+        edit_dns_record "$parsed_dns_args[1]" "$parsed_dns_type" "$parsed_dns_args[2]"
+        ;;
+      delete|remove)
+        shift
+        if [[ $# -ne 1 ]]; then
+          print_usage failed
+          exit 2
+        fi
+        delete_any_dns_record "$1"
+        ;;
+      *)
+        print_usage failed
+        exit 2
+        ;;
+    esac
     ;;
   route|routes)
     require_command curl
