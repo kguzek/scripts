@@ -30,13 +30,15 @@ Commands:
   route|routes TUNNEL edit ROUTE HOST SERVICE
                                           Edit a route hostname and service
   route|routes TUNNEL delete ROUTE       Delete an ingress route by hostname or number
+  dns                                    List DNS records
   dns add NAME [--type TYPE] TARGET      Add a DNS record, default type A
-  dns edit NAME [--type TYPE] TARGET     Edit a DNS record content and type
-  dns delete|remove NAME                 Delete a DNS record
+  dns edit RECORD [--type TYPE] TARGET   Edit a DNS record by name or number
+  dns delete|remove RECORD               Delete a DNS record by name or number
 
 Tunnel matching is case-insensitive and word-based.
 Route add/edit/delete also creates, updates, or deletes matching proxied DNS CNAME records.
 Route config and numbering are cached for 10 minutes in /tmp/scripts/cf-routes-<tunnel-id>.json.
+DNS record numbering is cached for 10 minutes in /tmp/scripts/cf-dns-records-<account-id>.json.
 
 Examples:
   $program_name tunnels
@@ -52,6 +54,7 @@ Examples:
   $program_name dns add a.example.com 192.168.0.1
   $program_name dns add b.example.com --type cname a.example.com
   $program_name dns edit a.example.com 192.168.0.2
+  $program_name dns edit 2 --type a 192.168.0.3
   $program_name dns remove b.example.com
 
 Secrets are loaded from: $env_file
@@ -151,6 +154,10 @@ route_cache_path() {
   printf '/tmp/scripts/cf-routes-%s.json' "$found_tunnel_id"
 }
 
+dns_cache_path() {
+  printf '/tmp/scripts/cf-dns-records-%s.json' "$CLOUDFLARE_ACCOUNT_ID"
+}
+
 write_route_cache_from_config() {
   local config="$1"
   local cache_file now
@@ -187,7 +194,7 @@ write_route_cache() {
   write_route_cache_from_config "$config"
 }
 
-is_route_cache_fresh() {
+is_cache_fresh() {
   local cache_file="$1"
   local now mtime
   local -A cache_stat
@@ -207,7 +214,7 @@ resolve_cached_route_number() {
   local cache_file route
 
   cache_file="$(route_cache_path)"
-  is_route_cache_fresh "$cache_file" || return 1
+  is_cache_fresh "$cache_file" || return 1
   jq -e '.config.ingress | type == "array"' "$cache_file" >/dev/null || return 1
 
   cached_config="$(jq '.config // {}' "$cache_file")"
@@ -232,7 +239,7 @@ load_cached_config() {
   local cache_file
 
   cache_file="$(route_cache_path)"
-  is_route_cache_fresh "$cache_file" || return 1
+  is_cache_fresh "$cache_file" || return 1
   jq -e '.config.ingress | type == "array"' "$cache_file" >/dev/null || return 1
 
   cached_config="$(jq '.config // {}' "$cache_file")"
@@ -245,6 +252,66 @@ require_cached_config() {
   fi
 
   fail "Route cache is missing or older than 10 minutes for $found_tunnel_name; run '$program_name routes $found_tunnel_name' first"
+}
+
+write_dns_cache() {
+  local records="$1"
+  local cache_file now
+
+  mkdir -p /tmp/scripts
+  zmodload zsh/datetime 2>/dev/null || true
+  now="${EPOCHSECONDS:-0}"
+  cache_file="$(dns_cache_path)"
+
+  jq -n \
+    --arg account_id "$CLOUDFLARE_ACCOUNT_ID" \
+    --argjson generated_at "$now" \
+    --argjson records "$records" '
+      {
+        account_id: $account_id,
+        generated_at: $generated_at,
+        records: (
+          $records
+          | to_entries
+          | map(.value + {number: (.key + 1)})
+        )
+      }
+    ' > "$cache_file"
+}
+
+resolve_cached_dns_number() {
+  local record_number="$1"
+  local cache_file record
+
+  cache_file="$(dns_cache_path)"
+  is_cache_fresh "$cache_file" || fail "DNS cache is missing or older than 10 minutes; run '$program_name dns' first"
+  jq -e '.records | type == "array"' "$cache_file" >/dev/null || fail "DNS cache is invalid; run '$program_name dns' first"
+
+  record="$(jq -r --argjson record_number "$record_number" '
+    .records[]?
+    | select(.number == $record_number)
+    | [.zone_id, .zone_name, .id, .name, .type, .content, (.proxied | tostring)]
+    | @tsv
+  ' "$cache_file")"
+
+  if [[ -z "$record" ]]; then
+    fail "No DNS record numbered $record_number in cached records; run '$program_name dns' to refresh"
+  fi
+
+  found_zone_id="${record%%$'\t'*}"
+  record="${record#*$'\t'}"
+  found_zone_name="${record%%$'\t'*}"
+  record="${record#*$'\t'}"
+  found_dns_record_id="${record%%$'\t'*}"
+  record="${record#*$'\t'}"
+  cached_dns_record_name="${record%%$'\t'*}"
+  record="${record#*$'\t'}"
+  cached_dns_record_type="${record%%$'\t'*}"
+  record="${record#*$'\t'}"
+  cached_dns_record_content="${record%%$'\t'*}"
+  cached_dns_record_proxied="${record#*$'\t'}"
+
+  log-status unchanged "Using cached DNS [$record_number] $cached_dns_record_name -> $cached_dns_record_content"
 }
 
 find_zone_for_hostname() {
@@ -305,6 +372,68 @@ find_dns_record_for_hostname() {
   match="${match#*$'\t'}"
   found_dns_record_content="${match%%$'\t'*}"
   found_dns_record_proxied="${match#*$'\t'}"
+}
+
+fetch_dns_records() {
+  local zones_response zones zone zone_id zone_name records_response zone_records
+
+  zones_response="$(cf_api GET "$(zones_path)")"
+  require_success "$zones_response" "Failed to list Cloudflare zones"
+
+  fetched_dns_records='[]'
+  zones="$(jq -r '.result[]? | [.id, .name] | @tsv' <<< "$zones_response")"
+
+  for zone in "${(@f)zones}"; do
+    zone_id="${zone%%$'\t'*}"
+    zone_name="${zone#*$'\t'}"
+    records_response="$(cf_api GET "$(dns_records_path "$zone_id")")"
+    require_success "$records_response" "Failed to list DNS records for $zone_name"
+
+    zone_records="$(jq --arg zone_id "$zone_id" --arg zone_name "$zone_name" '
+      [.result[]? | {
+        zone_id: $zone_id,
+        zone_name: $zone_name,
+        id: .id,
+        type: .type,
+        name: .name,
+        content: .content,
+        proxied: .proxied,
+        ttl: .ttl
+      }]
+    ' <<< "$records_response")"
+    fetched_dns_records="$(jq -n --argjson records "$fetched_dns_records" --argjson zone_records "$zone_records" '$records + $zone_records')"
+  done
+}
+
+refresh_dns_cache_if_fresh() {
+  local cache_file
+
+  cache_file="$(dns_cache_path)"
+  is_cache_fresh "$cache_file" || return
+
+  fetch_dns_records
+  write_dns_cache "$fetched_dns_records"
+}
+
+list_dns_records() {
+  local record_count record_number
+
+  fetch_dns_records
+  write_dns_cache "$fetched_dns_records"
+
+  record_count="$(jq 'length' <<< "$fetched_dns_records")"
+  log-status info "DNS records:"
+
+  if [[ "$record_count" == 0 ]]; then
+    log-status failed "No DNS records configured"
+    return
+  fi
+
+  record_number=1
+  jq -r '.[] | .name + " " + .type + " -> " + .content' <<< "$fetched_dns_records" | while read -r record; do
+    log-status numbered "$record_number" "$record"
+    (( record_number++ ))
+  done
 }
 
 normalize_dns_type() {
@@ -425,34 +554,54 @@ add_dns_record() {
   fi
 
   create_dns_record "$hostname" "$type" "$target"
+  refresh_dns_cache_if_fresh
 }
 
 edit_dns_record() {
-  local hostname="$1"
+  local record_target="$1"
   local type="$2"
   local target="$3"
+  local hostname
 
-  find_zone_for_hostname "$hostname"
-  find_dns_record_for_hostname "$hostname"
+  if [[ "$record_target" == <-> && "$record_target" -gt 0 ]]; then
+    resolve_cached_dns_number "$record_target"
+    hostname="$cached_dns_record_name"
+  else
+    hostname="$record_target"
+    find_zone_for_hostname "$hostname"
+    find_dns_record_for_hostname "$hostname"
 
-  if [[ -z "$found_dns_record_id" ]]; then
-    fail "No DNS record for $hostname in $found_zone_name"
+    if [[ -z "$found_dns_record_id" ]]; then
+      fail "No DNS record for $hostname in $found_zone_name"
+    fi
   fi
 
   update_dns_record "$hostname" "$type" "$target"
+  refresh_dns_cache_if_fresh
 }
 
 delete_any_dns_record() {
-  local hostname="$1"
+  local record_target="$1"
+  local hostname content
 
-  find_zone_for_hostname "$hostname"
-  find_dns_record_for_hostname "$hostname"
+  if [[ "$record_target" == <-> && "$record_target" -gt 0 ]]; then
+    resolve_cached_dns_number "$record_target"
+    hostname="$cached_dns_record_name"
+    content="$cached_dns_record_content"
+  else
+    hostname="$record_target"
+    find_zone_for_hostname "$hostname"
+    find_dns_record_for_hostname "$hostname"
 
-  if [[ -z "$found_dns_record_id" ]]; then
-    fail "No DNS record for $hostname in $found_zone_name"
+    if [[ -z "$found_dns_record_id" ]]; then
+      fail "No DNS record for $hostname in $found_zone_name"
+    fi
+
+    content="$found_dns_record_content"
   fi
 
-  remove_found_dns_record "$hostname" "$found_dns_record_content"
+  remove_found_dns_record "$hostname" "$content"
+  refresh_dns_cache_if_fresh
 }
 
 parse_dns_record_args() {
@@ -851,6 +1000,9 @@ case "${1:-}" in
           exit 2
         fi
         delete_any_dns_record "$1"
+        ;;
+      '')
+        list_dns_records
         ;;
       *)
         print_usage failed
