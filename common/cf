@@ -31,7 +31,7 @@ Commands:
                                           Edit a route hostname and service
   route|routes TUNNEL delete ROUTE       Delete an ingress route by hostname or number
   domain|domains                         List domains (zones) connected to the account
-  dns [DOMAIN]                           List DNS records (optionally scoped to a domain)
+  dns [DOMAIN] [-x TYPE ...]             List DNS records (optionally scoped to a domain)
   dns [DOMAIN] add NAME [--type TYPE] TARGET
                                           Add a DNS record, default type A
   dns [DOMAIN] edit RECORD [--type TYPE] TARGET
@@ -67,6 +67,8 @@ Examples:
   $program_name dns guzek.uk add test.guzek.uk 192.168.0.1
   $program_name dns 1 edit 5 --type a 192.168.0.2
   $program_name dns 1 delete 5
+  $program_name dns -x txt -x aaaa
+  $program_name dns 4 -x txt
 
 Secrets are loaded from: $env_file
 Required variables: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN"
@@ -494,12 +496,25 @@ refresh_dns_cache_if_fresh() {
 }
 
 list_dns_records() {
-  local record_count record_number
+  local record_count record_number jq_exclude
 
   fetch_dns_records
   write_dns_cache "$fetched_dns_records"
 
-  record_count="$(jq 'length' <<< "$fetched_dns_records")"
+  if [[ ${#dns_exclude_types[@]} -gt 0 ]]; then
+    local conditions=""
+    for type in "${dns_exclude_types[@]}"; do
+      if [[ -n "$conditions" ]]; then
+        conditions+=" and "
+      fi
+      conditions+=".type != \"$type\""
+    done
+    jq_exclude="map(select($conditions))"
+  else
+    jq_exclude="."
+  fi
+
+  record_count="$(jq "$jq_exclude | length" <<< "$fetched_dns_records")"
   log-status info "DNS records:"
 
   if [[ "$record_count" == 0 ]]; then
@@ -508,7 +523,7 @@ list_dns_records() {
   fi
 
   record_number=1
-  jq -r '.[] | .name + " " + .type + " -> " + .content' <<< "$fetched_dns_records" | while read -r record; do
+  jq -r "$jq_exclude | .[] | .name + \" \" + .type + \" -> \" + .content" <<< "$fetched_dns_records" | while read -r record; do
     log-status numbered "$record_number" "$record"
     (( record_number++ ))
   done
@@ -591,12 +606,25 @@ write_zone_dns_cache() {
 list_zone_dns_records() {
   local zone_id="$1"
   local zone_name="$2"
-  local record_count record_number
+  local record_count record_number jq_exclude
 
   fetch_zone_dns_records "$zone_id" "$zone_name"
   write_zone_dns_cache "$zone_id" "$fetched_zone_dns_records"
 
-  record_count="$(jq 'length' <<< "$fetched_zone_dns_records")"
+  if [[ ${#dns_exclude_types[@]} -gt 0 ]]; then
+    local conditions=""
+    for type in "${dns_exclude_types[@]}"; do
+      if [[ -n "$conditions" ]]; then
+        conditions+=" and "
+      fi
+      conditions+=".type != \"$type\""
+    done
+    jq_exclude="map(select($conditions))"
+  else
+    jq_exclude="."
+  fi
+
+  record_count="$(jq "$jq_exclude | length" <<< "$fetched_zone_dns_records")"
   log-status info "DNS records for $zone_name:"
 
   if [[ "$record_count" == 0 ]]; then
@@ -605,7 +633,7 @@ list_zone_dns_records() {
   fi
 
   record_number=1
-  jq -r '.[] | .name + " " + .type + " -> " + .content' <<< "$fetched_zone_dns_records" | while read -r record; do
+  jq -r "$jq_exclude | .[] | .name + \" \" + .type + \" -> \" + .content" <<< "$fetched_zone_dns_records" | while read -r record; do
     log-status numbered "$record_number" "$record"
     (( record_number++ ))
   done
@@ -1209,8 +1237,26 @@ case "${1:-}" in
 
     shift
     case "${1:-}" in
-      add|edit|delete|remove|'')
-        # No domain scope - existing global behavior
+      add|edit|delete|remove|-x|--exclude|'')
+        # No domain scope
+        dns_exclude_types=()
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            -x|--exclude)
+              shift
+              [[ $# -gt 0 ]] || fail "Missing type after -x/--exclude"
+              dns_exclude_types+=("$(normalize_dns_type "$1")")
+              shift
+              ;;
+            --exclude=*)
+              dns_exclude_types+=("$(normalize_dns_type "${1#--exclude=}")")
+              shift
+              ;;
+            *)
+              break
+              ;;
+          esac
+        done
         case "${1:-}" in
           add)
             shift
@@ -1236,7 +1282,7 @@ case "${1:-}" in
             fi
             delete_any_dns_record "$1"
             ;;
-          '')
+          *)
             list_dns_records
             ;;
         esac
@@ -1248,6 +1294,24 @@ case "${1:-}" in
           exit 2
         fi
         shift
+        dns_exclude_types=()
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            -x|--exclude)
+              shift
+              [[ $# -gt 0 ]] || fail "Missing type after -x/--exclude"
+              dns_exclude_types+=("$(normalize_dns_type "$1")")
+              shift
+              ;;
+            --exclude=*)
+              dns_exclude_types+=("$(normalize_dns_type "${1#--exclude=}")")
+              shift
+              ;;
+            *)
+              break
+              ;;
+          esac
+        done
         case "${1:-}" in
           add)
             shift
@@ -1286,12 +1350,8 @@ case "${1:-}" in
             fi
             refresh_zone_dns_cache_if_fresh
             ;;
-          '')
-            list_zone_dns_records "$found_zone_id" "$found_zone_name"
-            ;;
           *)
-            print_usage failed
-            exit 2
+            list_zone_dns_records "$found_zone_id" "$found_zone_name"
             ;;
         esac
         ;;
