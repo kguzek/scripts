@@ -6,16 +6,16 @@ target="$1"
 program_name="${0:t}"
 usage_message="Usage: $program_name [-h|--help] [target]"
 
-NETWORK_HOSTNAME="t15.guzek.uk"
-
 typeset -A MAC_ADDRESSES=(
   hp 3c:52:82:76:8d:92
+  pi b8:27:eb:20:76:89
   rig 18:c0:4d:39:46:c6
 )
 
 typeset -A WOL_EXTERNAL_PORTS=(
-  hp 1901
-  rig 1902
+  pi 1904
+  hp 1907
+  rig 1909
 )
 
 print_targets() {
@@ -50,9 +50,13 @@ if [[ -n "${MAC_ADDRESSES[$target]}" ]]; then
     exit 2
   fi
 
-  NETWORK_IP_ADDRESS="$(dig +short "$NETWORK_HOSTNAME")"
-  "$WAKE_COMMAND" -i "$NETWORK_IP_ADDRESS" -p "$wol_external_port" "$mac_address"
-  log-status complete "Successfully sent wake packet to $target"
+  dig_output="$(dig +short "$target.guzek.uk")"
+  dig_responses=("${(f)dig_output}")
+  log-status info "Resolved address: $target.guzek.uk -> ${${(j: -> :)dig_responses}//. / }"
+  NETWORK_IP_ADDRESS="${dig_responses[-1]}"
+  wake_output=$("$WAKE_COMMAND" -i "$NETWORK_IP_ADDRESS" -p "$wol_external_port" "$mac_address")
+  log-status info "$wake_output"
+  log-status complete "Successfully sent wake packet to $target via ${dig_responses[1]}"
   exit 0
 fi
 
