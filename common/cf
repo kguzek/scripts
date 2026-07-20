@@ -85,8 +85,8 @@ require_command() {
 
 fail_missing_envs() {
   local missing_env="$1"
-  log-status failed "Missing $missing_env in $env_file"
-  log-status info "$api_token_help"
+  log-status failed "Missing $missing_env in $env_file" >&2
+  log-status info "$api_token_help" >&2
   exit 1
 }
 
@@ -120,8 +120,8 @@ cf_api() {
   body="${response%$'\n'$http_status}"
 
   if [[ "$http_status" == 401 || "$http_status" == 403 ]]; then
-    log-status failed "Cloudflare API returned HTTP $http_status"
-    log-status info "$api_token_help"
+    log-status failed "Cloudflare API returned HTTP $http_status" >&2
+    log-status info "$api_token_help" >&2
     exit 1
   fi
 
@@ -133,7 +133,7 @@ require_success() {
   local message="$2"
 
   if ! jq -e '.success == true' >/dev/null <<< "$response"; then
-    log-status failed "$message"
+    log-status failed "$message" >&2
     jq -r '.errors[]? | "- " + (.message // "unknown error")' >&2 <<< "$response"
     exit 1
   fi
@@ -518,7 +518,7 @@ list_dns_records() {
   log-status info "DNS records:"
 
   if [[ "$record_count" == 0 ]]; then
-    log-status failed "No DNS records configured"
+    log-status failed "No DNS records configured" >&2
     return
   fi
 
