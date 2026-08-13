@@ -1,0 +1,7 @@
+#!/usr/bin/env zsh
+
+source ~/.zshrc
+cd ~/repos/dotfiles
+gfm
+grbm
+gpf
