@@ -1,0 +1,8 @@
+#!/usr/bin/env zsh
+
+if [ ! -f '/etc/os-release' ]; then
+  uname -s
+  exit 0
+fi
+
+grep '^NAME=' /etc/os-release | sed -e 's/NAME="\(.\+\)"/\1/' -e 's/\(.\+\) \(GNU\/\)\?Linux/\1/'
