@@ -2,29 +2,51 @@
 
 set -e
 
-target="$1"
-program_name="${0:t}"
-usage_message="Usage: $program_name [-h|--help] [target]"
+TARGET="$1"
+PROGRAM_NAME="${0:t}"
 
-typeset -A MAC_ADDRESSES=(
+declare -A MAC_ADDRESSES=(
   hp 3c:52:82:76:8d:92
   pi b8:27:eb:20:76:89
   rig 18:c0:4d:39:46:c6
 )
 
-typeset -A WOL_EXTERNAL_PORTS=(
+declare -a TARGETS=(${(ok)MAC_ADDRESSES})
+
+declare -A WOL_EXTERNAL_PORTS=(
   pi 1904
   hp 1907
   rig 1909
 )
 
-print_targets() {
-  log-status info "Available targets: ${(j: :)${(ok)MAC_ADDRESSES}}"
+print_hint() {
+  echo "Try '$PROGRAM_NAME --help' for more information." >&2
 }
 
-if [ -z "$target" ] || [ "$target" = "-h" ] || [ "$target" = "--help" ]; then
-  echo "$usage_message"
-  print_targets
+print_usage() {
+  echo "Usage: $PROGRAM_NAME [OPTION] TARGET"
+  echo "where TARGET := { ${(j: | :)TARGETS} }"
+  echo
+  echo 'Options:'
+  echo '  --help, -h'
+  echo '        display help message and exit'
+  echo '  --list, -l'
+  echo '        display a space-separated list of available targets and exit'
+}
+
+if [ -z "$TARGET" ]; then
+  log-status failed "$PROGRAM_NAME: missing target" >&2
+  print_hint
+  exit 1
+fi
+
+if [ "$TARGET" = '-h' ] || [ "$TARGET" = '--help' ]; then
+  print_usage
+  exit 0
+fi
+
+if [ "$TARGET" = '-l' ] || [ "$TARGET" = '--list' ]; then
+  echo "${(j: :)TARGETS}"
   exit 0
 fi
 
@@ -41,25 +63,25 @@ else
   exit 2
 fi
 
-if [[ -n "${MAC_ADDRESSES[$target]}" ]]; then
-  mac_address="${MAC_ADDRESSES[$target]}"
-  wol_external_port="${WOL_EXTERNAL_PORTS[$target]}"
+if [[ -n "${MAC_ADDRESSES[$TARGET]}" ]]; then
+  mac_address="${MAC_ADDRESSES[$TARGET]}"
+  wol_external_port="${WOL_EXTERNAL_PORTS[$TARGET]}"
 
   if [[ -z "$wol_external_port" ]]; then
-    log-status failed "No WoL port configured for target: $target"
+    log-status failed "No WoL port configured for target: $TARGET"
     exit 2
   fi
 
-  dig_output="$(dig +short "$target.guzek.uk")"
+  dig_output="$(dig +short "$TARGET.guzek.uk")"
   dig_responses=("${(f)dig_output}")
-  log-status info "Resolved address: $target.guzek.uk -> ${${(j: -> :)dig_responses}//. / }"
+  log-status info "Resolved address: $TARGET.guzek.uk -> ${${(j: -> :)dig_responses}//. / }"
   NETWORK_IP_ADDRESS="${dig_responses[-1]}"
   wake_output=$("$WAKE_COMMAND" -i "$NETWORK_IP_ADDRESS" -p "$wol_external_port" "$mac_address")
   log-status info "$wake_output"
-  log-status complete "Successfully sent wake packet to $target via ${dig_responses[1]}"
+  log-status complete "Successfully sent wake packet to $TARGET via ${dig_responses[1]}"
   exit 0
 fi
 
-log-status failed "Invalid target: $target"
-print_targets
+log-status failed "$PROGRAM_NAME: '$TARGET': invalid target"
+print_hint
 exit 1
