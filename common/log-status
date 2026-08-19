@@ -4,15 +4,9 @@ set -e
 
 script_name="${0:t}"
 
-if [[ -t 1 ]]; then
-  c_reset=$'\e[0m'
-  c_green=$'\e[32m'
-  c_yellow=$'\e[33m'
-  c_blue=$'\e[34m'
-  c_grey=$'\e[90m'
-  c_red=$'\e[31m'
-  c_purple=$'\e[35m'
-else
+set_colors() {
+  local stream="$1"
+
   c_reset=''
   c_green=''
   c_yellow=''
@@ -20,25 +14,37 @@ else
   c_grey=''
   c_red=''
   c_purple=''
-fi
+
+  if [[ -t "$stream" ]]; then
+    c_reset=$'\e[0m'
+    c_green=$'\e[32m'
+    c_yellow=$'\e[33m'
+    c_blue=$'\e[34m'
+    c_grey=$'\e[90m'
+    c_red=$'\e[31m'
+    c_purple=$'\e[35m'
+  fi
+}
 
 status_format=(
-  changed '[+]' "$c_green"
-  complete '[✓]' "$c_green"
-  warn '[!]' "$c_yellow"
-  info '[·]' "$c_grey"
-  unchanged '[=]' "$c_blue"
-  failed '[x]' "$c_red"
-  input '[?]' "$c_purple"
+  changed '[+]' c_green
+  complete '[✓]' c_green
+  warn '[!]' c_yellow
+  info '[·]' c_grey
+  unchanged '[=]' c_blue
+  failed '[x]' c_red
+  input '[?]' c_purple
 )
 
 print_usage() {
   local i level
   local levels=()
 
+  set_colors 2
+
   for (( i = 1; i <= ${#status_format}; i += 3 )); do
     level="${status_format[$i]}"
-    levels+=("${status_format[$i + 2]}$level$c_reset")
+    levels+=("${(P)status_format[$i + 2]}$level$c_reset")
   done
 
   echo "Usage: $script_name LEVEL MESSAGE..." >&2
@@ -56,6 +62,7 @@ if [[ "$1" == numbered ]]; then
   shift 2
   message="$*"
 
+  set_colors 1
   printf '%b[%s]%b %s\n' "$c_blue" "$number" "$c_reset" "$message"
   exit 0
 fi
@@ -70,17 +77,6 @@ level="$1"
 shift
 message="$*"
 
-prefix='[?]'
-color="$c_yellow"
-
-for (( i = 1; i <= ${#status_format}; i += 3 )); do
-  if [[ "$level" == "${status_format[$i]}" ]]; then
-    prefix="${status_format[$i + 1]}"
-    color="${status_format[$i + 2]}"
-    break
-  fi
-done
-
 if [[ "$level" == input ]]; then
   output_stream=2
   newline=''
@@ -92,6 +88,19 @@ else
   fi
   newline='\n'
 fi
+
+set_colors "$output_stream"
+
+prefix='[?]'
+color="$c_yellow"
+
+for (( i = 1; i <= ${#status_format}; i += 3 )); do
+  if [[ "$level" == "${status_format[$i]}" ]]; then
+    prefix="${status_format[$i + 1]}"
+    color="${(P)status_format[$i + 2]}"
+    break
+  fi
+done
 
 printf '%b%s%b %s%b' "$color" "$prefix" "$c_reset" "$message" "$newline" >&$output_stream
 
