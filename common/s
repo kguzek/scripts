@@ -56,7 +56,7 @@ succeed() {
 }
 
 iterate_routes() {
-  local -A ROUTES=(
+  local -a ROUTES=(
     "$TARGET_HOSTNAME.lan.guzek.uk" "LAN"
     "$TARGET_HOSTNAME.vpn.guzek.uk" "VPN"
     "ssh-$TARGET_HOSTNAME.guzek.uk" "Cloudflare tunnel"
