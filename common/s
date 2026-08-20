@@ -2,25 +2,49 @@
 
 set -e
 PING_TIMEOUT_SECONDS=0.1
-target="$1"
+PROGRAM_NAME="${0:t}"
+AVAILABLE_TARGETS=($(wk -l))
+
+print_usage() {
+  cat <<EOF
+Usage: $PROGRAM_NAME [OPTION]... TARGET [SSH_OPTION]...
+where TARGET := { ${(j: | :)AVAILABLE_TARGETS} }
+
+Options:
+  --help, -h
+        display help message and exit
+EOF
+}
+
+zparseopts -D -- \
+  {h,-help}=FLAG_HELP
+
+if [[ -n "$FLAG_HELP" ]]; then
+  print_usage
+  exit 0
+fi
+
+TARGET="$1"
+
+if [[ -z "$TARGET" ]]; then
+  print_usage >&2
+  exit 2
+fi
+
 shift
-target_hostname="${target#*@}"
-ssh_arguments=("$@")
-routes=(
-  "$target_hostname.lan.guzek.uk" "LAN"
-  "$target_hostname.vpn.guzek.uk" "VPN"
-  "ssh-$target_hostname.guzek.uk" "Cloudflare tunnel"
-)
-if [ "$target" = "$target_hostname" ]; then
-  target_user=""
+TARGET_HOSTNAME="${TARGET#*@}"
+SSH_ARGUMENTS=("$@")
+
+if [ "$TARGET" = "$TARGET_HOSTNAME" ]; then
+  TARGET_USER=""
 else
-  target_user="${target%@*}@"
+  TARGET_USER="${TARGET%@*}@"
 fi
 
 test_connection() {
   local address="$1"
   local label="$2"
-  log-status info "Attempting connection to $target via $label"
+  log-status info "Attempting connection to $TARGET via $label"
   ping -c 1 -W "$PING_TIMEOUT_SECONDS" "$address" >/dev/null 2>&1
 }
 
@@ -28,16 +52,25 @@ succeed() {
   local address="$1"
   local label="$2"
   log-status complete "Connection established!"
-  exec ssh -t "$target_user$address" $ssh_arguments
+  exec ssh -t "$TARGET_USER$address" $SSH_ARGUMENTS
 }
 
+iterate_routes() {
+  local -A ROUTES=(
+    "$TARGET_HOSTNAME.lan.guzek.uk" "LAN"
+    "$TARGET_HOSTNAME.vpn.guzek.uk" "VPN"
+    "ssh-$TARGET_HOSTNAME.guzek.uk" "Cloudflare tunnel"
+  )
 
-for host label in ${(kv)routes}; do
-  if test_connection "$host" "$label"; then
-    succeed "$host" "$label"
-    exit 0
-  fi
-done
+  for host label in ${(kv)ROUTES}; do
+    if test_connection "$host" "$label"; then
+      succeed "$host" "$label"
+      exit 0
+    fi
+  done
+}
 
-log-status failed "No available route to $target"
+iterate_routes
+
+log-status failed "No available route to $TARGET"
 exit 1
