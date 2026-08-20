@@ -2,9 +2,9 @@
 
 set -e
 
-program_name="${0:t}"
-script_dir="${0:A:h}"
-env_file="${script_dir:h}/cloudflare.env"
+PROGRAM_NAME="${0:t}"
+SCRIPT_DIR="${0:A:h}"
+ENV_FILE="${SCRIPT_DIR:h}/cloudflare.env"
 
 api_token_help="Create a Cloudflare API token with these steps:
 1. Open https://dash.cloudflare.com.
@@ -16,27 +16,38 @@ api_token_help="Create a Cloudflare API token with these steps:
 7. Add another policy at the bottom.
 8. Change the new policy scope to 'All Domains'.
 9. Add 'DNS & Zones' > 'DNS' with Read and Edit permissions.
-10. Save the token in $env_file as CLOUDFLARE_API_TOKEN."
+10. Save the token in $ENV_FILE as CLOUDFLARE_API_TOKEN."
 
 print_usage() {
-  local level="${1:-info}"
-  log-status "$level" "Usage: $program_name [-h|--help] COMMAND
+  echo "Usage: $PROGRAM_NAME [OPTION]... COMMAND
 
 Commands:
-  tunnel|tunnels                         List Cloudflare tunnels
-  route|routes TUNNEL                    List ingress routes for a tunnel
-  route|routes TUNNEL add HOST SERVICE   Add an ingress route to a tunnel
-  route|routes TUNNEL edit ROUTE SERVICE Edit a route service by hostname or number
+  tunnel|tunnels
+        List Cloudflare tunnels
+  route|routes TUNNEL
+        List ingress routes for a tunnel
+  route|routes TUNNEL add HOST SERVICE
+        Add an ingress route to a tunnel
+  route|routes TUNNEL edit ROUTE SERVICE
+        Edit a route service by hostname or number
   route|routes TUNNEL edit ROUTE HOST SERVICE
-                                          Edit a route hostname and service
-  route|routes TUNNEL delete ROUTE       Delete an ingress route by hostname or number
-  domain|domains                         List domains (zones) connected to the account
-  dns [DOMAIN] [-x TYPE ...]             List DNS records (optionally scoped to a domain)
+        Edit a route hostname and service
+  route|routes TUNNEL delete ROUTE
+        Delete an ingress route by hostname or number
+  domain|domains
+        List domains (zones) connected to the account
+  dns [DOMAIN] [-x TYPE ...]
+        List DNS records (optionally scoped to a domain)
   dns [DOMAIN] add NAME [--type TYPE] TARGET
-                                          Add a DNS record, default type A
+        Add a DNS record, default type A
   dns [DOMAIN] edit RECORD [--type TYPE] TARGET
-                                          Edit a DNS record by name or number
-  dns [DOMAIN] delete|remove RECORD      Delete a DNS record by name or number
+        Edit a DNS record by name or number
+  dns [DOMAIN] delete|remove RECORD
+        Delete a DNS record by name or number
+
+Options:
+  --help, -h
+        display help message and exit
 
 Tunnel matching is case-insensitive and word-based.
 Route add/edit/delete also creates, updates, or deletes matching proxied DNS CNAME records.
@@ -46,31 +57,31 @@ DNS record numbering is cached for 10 minutes in /tmp/scripts/cf-dns-records-<ac
 (per-domain record numbering: /tmp/scripts/cf-dns-zone-<zone-id>.json).
 
 Examples:
-  $program_name tunnels
-  $program_name tunnel
-  $program_name domains
-  $program_name routes hp
-  $program_name route gliwice
-  $program_name routes gliwice
-  $program_name routes hp add xxx.guzek.uk http://localhost
-  $program_name routes hp edit 2 http://localhost:3000
-  $program_name routes hp edit xxx.guzek.uk new.guzek.uk http://localhost:3000
-  $program_name routes hp delete xxx.guzek.uk
-  $program_name routes hp delete 2
-  $program_name dns add a.example.com 192.168.0.1
-  $program_name dns add b.example.com --type cname a.example.com
-  $program_name dns edit a.example.com 192.168.0.2
-  $program_name dns edit 2 --type a 192.168.0.3
-  $program_name dns remove b.example.com
-  $program_name dns guzek.uk
-  $program_name dns 1
-  $program_name dns guzek.uk add test.guzek.uk 192.168.0.1
-  $program_name dns 1 edit 5 --type a 192.168.0.2
-  $program_name dns 1 delete 5
-  $program_name dns -x txt -x aaaa
-  $program_name dns 4 -x txt
+  $PROGRAM_NAME tunnels
+  $PROGRAM_NAME tunnel
+  $PROGRAM_NAME domains
+  $PROGRAM_NAME routes hp
+  $PROGRAM_NAME route gliwice
+  $PROGRAM_NAME routes gliwice
+  $PROGRAM_NAME routes hp add xxx.guzek.uk http://localhost
+  $PROGRAM_NAME routes hp edit 2 http://localhost:3000
+  $PROGRAM_NAME routes hp edit xxx.guzek.uk new.guzek.uk http://localhost:3000
+  $PROGRAM_NAME routes hp delete xxx.guzek.uk
+  $PROGRAM_NAME routes hp delete 2
+  $PROGRAM_NAME dns add a.example.com 192.168.0.1
+  $PROGRAM_NAME dns add b.example.com --type cname a.example.com
+  $PROGRAM_NAME dns edit a.example.com 192.168.0.2
+  $PROGRAM_NAME dns edit 2 --type a 192.168.0.3
+  $PROGRAM_NAME dns remove b.example.com
+  $PROGRAM_NAME dns guzek.uk
+  $PROGRAM_NAME dns 1
+  $PROGRAM_NAME dns guzek.uk add test.guzek.uk 192.168.0.1
+  $PROGRAM_NAME dns 1 edit 5 --type a 192.168.0.2
+  $PROGRAM_NAME dns 1 delete 5
+  $PROGRAM_NAME dns -x txt -x aaaa
+  $PROGRAM_NAME dns 4 -x txt
 
-Secrets are loaded from: $env_file
+Secrets are loaded from: $ENV_FILE
 Required variables: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN"
 }
 
@@ -85,14 +96,14 @@ require_command() {
 
 fail_missing_envs() {
   local missing_env="$1"
-  log-status failed "Missing $missing_env in $env_file" >&2
+  log-status failed "Missing $missing_env in $ENV_FILE" >&2
   log-status info "$api_token_help" >&2
   exit 1
 }
 
 load_env() {
-  [[ -f "$env_file" ]] || fail "Missing secrets file: $env_file"
-  source "$env_file"
+  [[ -f "$ENV_FILE" ]] || fail "Missing secrets file: $ENV_FILE"
+  source "$ENV_FILE"
 
   [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] || fail_missing_envs "CLOUDFLARE_ACCOUNT_ID"
   [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || fail_missing_envs "CLOUDFLARE_API_TOKEN"
@@ -247,7 +258,7 @@ resolve_cached_route_number() {
   ' "$cache_file")"
 
   if [[ -z "$route" ]]; then
-    fail "No route numbered $route_number in cached routes for $found_tunnel_name; run '$program_name routes $found_tunnel_name' to refresh"
+    fail "No route numbered $route_number in cached routes for $found_tunnel_name; run '$PROGRAM_NAME routes $found_tunnel_name' to refresh"
   fi
 
   cached_route_hostname="${route%%$'\t'*}"
@@ -272,7 +283,7 @@ require_cached_config() {
     return
   fi
 
-  fail "Route cache is missing or older than 10 minutes for $found_tunnel_name; run '$program_name routes $found_tunnel_name' first"
+  fail "Route cache is missing or older than 10 minutes for $found_tunnel_name; run '$PROGRAM_NAME routes $found_tunnel_name' first"
 }
 
 write_dns_cache() {
@@ -305,8 +316,8 @@ resolve_cached_dns_number() {
   local cache_file record
 
   cache_file="$(dns_cache_path)"
-  is_cache_fresh "$cache_file" || fail "DNS cache is missing or older than 10 minutes; run '$program_name dns' first"
-  jq -e '.records | type == "array"' "$cache_file" >/dev/null || fail "DNS cache is invalid; run '$program_name dns' first"
+  is_cache_fresh "$cache_file" || fail "DNS cache is missing or older than 10 minutes; run '$PROGRAM_NAME dns' first"
+  jq -e '.records | type == "array"' "$cache_file" >/dev/null || fail "DNS cache is invalid; run '$PROGRAM_NAME dns' first"
 
   record="$(jq -r --argjson record_number "$record_number" '
     .records[]?
@@ -316,7 +327,7 @@ resolve_cached_dns_number() {
   ' "$cache_file")"
 
   if [[ -z "$record" ]]; then
-    fail "No DNS record numbered $record_number in cached records; run '$program_name dns' to refresh"
+    fail "No DNS record numbered $record_number in cached records; run '$PROGRAM_NAME dns' to refresh"
   fi
 
   found_zone_id="${record%%$'\t'*}"
@@ -645,8 +656,8 @@ resolve_cached_zone_dns_number() {
   local cache_file record
 
   cache_file="$(dns_zone_cache_path "$zone_id")"
-  is_cache_fresh "$cache_file" || fail "DNS cache for $found_zone_name is missing or older than 10 minutes; run '$program_name dns $found_zone_name' first"
-  jq -e '.records | type == "array"' "$cache_file" >/dev/null || fail "DNS cache is invalid; run '$program_name dns $found_zone_name' first"
+  is_cache_fresh "$cache_file" || fail "DNS cache for $found_zone_name is missing or older than 10 minutes; run '$PROGRAM_NAME dns $found_zone_name' first"
+  jq -e '.records | type == "array"' "$cache_file" >/dev/null || fail "DNS cache is invalid; run '$PROGRAM_NAME dns $found_zone_name' first"
 
   record="$(jq -r --argjson record_number "$record_number" '
     .records[]?
@@ -656,7 +667,7 @@ resolve_cached_zone_dns_number() {
   ' "$cache_file")"
 
   if [[ -z "$record" ]]; then
-    fail "No DNS record numbered $record_number in cached records for $found_zone_name; run '$program_name dns $found_zone_name' to refresh"
+    fail "No DNS record numbered $record_number in cached records for $found_zone_name; run '$PROGRAM_NAME dns $found_zone_name' to refresh"
   fi
 
   found_zone_id="${record%%$'\t'*}"
@@ -1201,11 +1212,11 @@ add_route() {
 
 case "${1:-}" in
   -h|--help)
-    print_usage info
+    print_usage
     exit 0
     ;;
   '')
-    print_usage failed
+    print_usage >&2
     exit 2
     ;;
   tunnel|tunnels)
@@ -1214,7 +1225,7 @@ case "${1:-}" in
     load_env
 
     if [[ $# -ne 1 ]]; then
-      print_usage failed
+      print_usage >&2
       exit 2
     fi
     list_tunnels
@@ -1225,7 +1236,7 @@ case "${1:-}" in
     load_env
 
     if [[ $# -ne 1 ]]; then
-      print_usage failed
+      print_usage >&2
       exit 2
     fi
     list_domains
@@ -1261,7 +1272,7 @@ case "${1:-}" in
           add)
             shift
             if ! parse_dns_record_args "$@" || [[ "${#parsed_dns_args[@]}" -ne 2 ]]; then
-              print_usage failed
+              print_usage >&2
               exit 2
             fi
             add_dns_record "$parsed_dns_args[1]" "$parsed_dns_type" "$parsed_dns_args[2]"
@@ -1269,7 +1280,7 @@ case "${1:-}" in
           edit)
             shift
             if ! parse_dns_record_args "$@" || [[ "${#parsed_dns_args[@]}" -ne 2 ]]; then
-              print_usage failed
+              print_usage >&2
               exit 2
             fi
             edit_dns_record "$parsed_dns_args[1]" "$parsed_dns_type" "$parsed_dns_args[2]"
@@ -1277,7 +1288,7 @@ case "${1:-}" in
           delete|remove)
             shift
             if [[ $# -ne 1 ]]; then
-              print_usage failed
+              print_usage >&2
               exit 2
             fi
             delete_any_dns_record "$1"
@@ -1290,7 +1301,7 @@ case "${1:-}" in
       *)
         # Domain-scoped operations
         if ! resolve_domain "$1"; then
-          print_usage failed
+          print_usage >&2
           exit 2
         fi
         shift
@@ -1316,7 +1327,7 @@ case "${1:-}" in
           add)
             shift
             if ! parse_dns_record_args "$@" || [[ "${#parsed_dns_args[@]}" -ne 2 ]]; then
-              print_usage failed
+              print_usage >&2
               exit 2
             fi
             add_dns_record "$parsed_dns_args[1]" "$parsed_dns_type" "$parsed_dns_args[2]"
@@ -1325,7 +1336,7 @@ case "${1:-}" in
           edit)
             shift
             if ! parse_dns_record_args "$@" || [[ "${#parsed_dns_args[@]}" -ne 2 ]]; then
-              print_usage failed
+              print_usage >&2
               exit 2
             fi
             if [[ "$parsed_dns_args[1]" == <-> && "$parsed_dns_args[1]" -gt 0 ]]; then
@@ -1339,7 +1350,7 @@ case "${1:-}" in
           delete|remove)
             shift
             if [[ $# -ne 1 ]]; then
-              print_usage failed
+              print_usage >&2
               exit 2
             fi
             if [[ "$1" == <-> && "$1" -gt 0 ]]; then
@@ -1364,7 +1375,7 @@ case "${1:-}" in
 
     shift
     if [[ $# -lt 1 ]]; then
-      print_usage failed
+      print_usage >&2
       exit 2
     fi
 
@@ -1376,7 +1387,7 @@ case "${1:-}" in
 
     selector="${(j: :)selector_parts}"
     if [[ -z "$selector" ]]; then
-      print_usage failed
+      print_usage >&2
       exit 2
     fi
 
@@ -1384,7 +1395,7 @@ case "${1:-}" in
       add)
         shift
         if [[ $# -ne 2 ]]; then
-          print_usage failed
+          print_usage >&2
           exit 2
         fi
         add_route "$selector" "$1" "$2"
@@ -1396,14 +1407,14 @@ case "${1:-}" in
         elif [[ $# -eq 3 ]]; then
           edit_route "$selector" "$1" "$2" "$3"
         else
-          print_usage failed
+          print_usage >&2
           exit 2
         fi
         ;;
       delete|remove)
         shift
         if [[ $# -ne 1 ]]; then
-          print_usage failed
+          print_usage >&2
           exit 2
         fi
         delete_route "$selector" "$1"
@@ -1412,14 +1423,14 @@ case "${1:-}" in
         list_routes "$selector"
         ;;
       *)
-        print_usage failed
+        print_usage >&2
         exit 2
         ;;
     esac
     ;;
   *)
     log-status failed "Unknown command: $1"
-    print_usage failed
+    print_usage >&2
     exit 2
     ;;
 esac

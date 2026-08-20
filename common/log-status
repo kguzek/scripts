@@ -2,7 +2,7 @@
 
 set -e
 
-script_name="${0:t}"
+PROGRAM_NAME="${0:t}"
 
 set_colors() {
   local stream="$1"
@@ -47,8 +47,9 @@ print_usage() {
     levels+=("${(P)status_format[$i + 2]}$level$c_reset")
   done
 
-  echo "Usage: $script_name LEVEL MESSAGE..." >&2
-  echo "       $script_name numbered NUMBER MESSAGE..." >&2
+  echo "Usage: $PROGRAM_NAME LEVEL MESSAGE..." >&2
+  echo "       $PROGRAM_NAME numbered NUMBER MESSAGE..." >&2
+  echo
   echo "Available levels: ${(j:, :)levels}" >&2
 }
 

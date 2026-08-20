@@ -1,40 +1,68 @@
 #!/usr/bin/env zsh
 
 set -e
-program_name="${0:t}"
+PROGRAM_NAME="${0:t}"
 
 START_TIME_FILE_PATH="$HOME/.local/state/scripts/time-script-lock.txt"
 
 if ! zmodload zsh/datetime; then
-  log-status failed "$program_name: failed to load zsh/datetime"
+  log-status failed "$PROGRAM_NAME: failed to load zsh/datetime"
   exit 1
 fi
 
-case "${1:-}" in
-  --start)
-    mkdir -p "${START_TIME_FILE_PATH:h}"
-    printf '%s\n' "$EPOCHREALTIME" > "$START_TIME_FILE_PATH"
-    ;;
-  --end)
-    if ! read -r start_time < "$START_TIME_FILE_PATH"; then
-      log-status failed "$program_name: missing file $START_TIME_FILE_PATH; run: $program_name --start"
-      exit 1
-    fi
+print_help() {
+    cat <<EOF
+Usage: $PROGRAM_NAME OPTION
 
-    elapsed=$((EPOCHREALTIME - start_time))
+Options:
+  --start, -s
+        start counting time
+  --end, -e
+        output the time elapsed since running '$PROGRAM_NAME --start'
+  --help, -h
+        display help message and exit
+EOF
+}
 
-    if (( elapsed < 1 )); then
-      decimal_places=3
-    elif (( elapsed < 10 )); then
-      decimal_places=2
-    else
-      decimal_places=1
-    fi
+zparseopts -D -- \
+  {h,-help}=FLAG_HELP \
+  {s,-start}=FLAG_START \
+  {e,-end}=FLAG_END
 
-    printf "%.${decimal_places}f\n" "$elapsed"
-    ;;
-  *)
-    log-status failed "Usage: ${0:t} --start|--end"
-    exit 2
-    ;;
-esac
+if [[ -n "$FLAG_HELP" ]]; then
+  print_help
+  exit 0
+fi
+
+if [[ -n "$FLAG_START" ]]; then
+  mkdir -p "${START_TIME_FILE_PATH:h}"
+  printf '%s\n' "$EPOCHREALTIME" > "$START_TIME_FILE_PATH"
+  exit 0
+fi
+
+if [[ -n "$FLAG_END" ]]; then
+  if ! read -r start_time < "$START_TIME_FILE_PATH"; then
+    log-status failed "$PROGRAM_NAME: missing file $START_TIME_FILE_PATH; run: '$PROGRAM_NAME --start'"
+    exit 1
+  fi
+
+  elapsed=$((EPOCHREALTIME - start_time))
+
+  if (( elapsed < 1 )); then
+    decimal_places=3
+  elif (( elapsed < 10 )); then
+    decimal_places=2
+  else
+    decimal_places=1
+  fi
+
+  printf "%.${decimal_places}f\n" "$elapsed"
+  exit 0
+fi
+
+if (( $# > 0 )); then
+  log-status failed "$PROGRAM_NAME: '$1': invalid argument"
+fi
+
+print_help >&2
+exit 2
