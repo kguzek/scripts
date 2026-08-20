@@ -28,10 +28,10 @@ print_usage() {
   echo "where TARGET := { ${(j: | :)TARGETS} }"
   echo
   echo 'Options:'
-  echo '  --help, -h'
-  echo '        display help message and exit'
   echo '  --list, -l'
   echo '        display a space-separated list of available targets and exit'
+  echo '  --help, -h'
+  echo '        display help message and exit'
 }
 
 if [ -z "$TARGET" ]; then
