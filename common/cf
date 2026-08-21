@@ -436,14 +436,17 @@ find_zone_for_hostname() {
 
 find_dns_record_for_hostname() {
   local hostname="$1"
+  local type="${2:-}"
   local response match
 
   response="$(cf_api GET "$(dns_records_path "$found_zone_id")")"
   require_success "$response" "Failed to list DNS records for $found_zone_name"
 
-  match="$(jq -r --arg hostname "$hostname" '
+  match="$(jq -r --arg hostname "$hostname" --arg type "$type" '
     ($hostname | ascii_downcase) as $host
-    | [.result[]? | select((.name | ascii_downcase) == $host)]
+    | [.result[]?
+        | select((.name | ascii_downcase) == $host)
+        | select(($type == "") or (.type == $type))]
     | first // empty
     | [.id, .type, .content, (.proxied | tostring)]
     | @tsv
@@ -807,10 +810,10 @@ add_dns_record() {
   local target="$3"
 
   find_zone_for_hostname "$hostname"
-  find_dns_record_for_hostname "$hostname"
+  find_dns_record_for_hostname "$hostname" "$type"
 
   if [[ -n "$found_dns_record_id" ]]; then
-    fail "DNS record already exists for $hostname in $found_zone_name"
+    fail "DNS $type record already exists for $hostname in $found_zone_name"
   fi
 
   create_dns_record "$hostname" "$type" "$target"
@@ -829,10 +832,10 @@ edit_dns_record() {
   else
     hostname="$record_target"
     find_zone_for_hostname "$hostname"
-    find_dns_record_for_hostname "$hostname"
+    find_dns_record_for_hostname "$hostname" "$type"
 
     if [[ -z "$found_dns_record_id" ]]; then
-      fail "No DNS record for $hostname in $found_zone_name"
+      fail "No DNS $type record for $hostname in $found_zone_name"
     fi
   fi
 
