@@ -13,6 +13,8 @@ Usage: $PROGRAM_NAME [OPTION]...
 Options:
   --dry-run, -n
         check for updates without pulling containers
+  --no-sudo, -S
+        skip checking elevated containers (for non-interactive use)
   --help, -h
         display help message and exit
 EOF
@@ -20,6 +22,7 @@ EOF
 
 zparseopts -D -- \
   {n,-dry-run}=FLAG_DRY_RUN \
+  {S,-no-sudo}=FLAG_NO_SUDO \
   {h,-help}=FLAG_HELP
 
 if [[ -n "$FLAG_HELP" ]]; then
@@ -46,14 +49,84 @@ is_dry_run() {
   [[ -n "$FLAG_DRY_RUN" ]]
 }
 
+if (( EUID == 0 )); then
+  IS_ROOT=true
+else
+  IS_ROOT=false
+fi
+
+if [[ -n "$FLAG_NO_SUDO" ]] || $IS_ROOT; then
+  NO_SUDO=true
+else
+  NO_SUDO=false
+fi
+
+if ! $IS_ROOT && ! $NO_SUDO; then
+  sudo -v 2>/dev/null || true
+fi
+
 time-script --start
 
+detect_runtime() {
+  local dir="$1"
+
+  (
+    cd "$dir" || exit 1
+
+    local result
+
+    result=$(docker compose ps --quiet 2>/dev/null) || true
+    if [[ -n "$result" ]]; then
+      echo "docker"
+      exit 0
+    fi
+
+    result=$(podman compose ps --quiet 2>/dev/null) || true
+    if [[ -n "$result" ]]; then
+      echo "podman"
+      exit 0
+    fi
+
+    if [[ "$NO_SUDO" == false ]]; then
+      result=$(sudo podman compose ps --quiet 2>/dev/null) || true
+      if [[ -n "$result" ]]; then
+        echo "sudo podman"
+        exit 0
+      fi
+    fi
+  ) || true
+}
+
+compose_prefix() {
+  case "$1" in
+    docker)        echo "docker compose" ;;
+    podman)        echo "podman compose" ;;
+    "sudo podman") echo "sudo podman compose" ;;
+  esac
+}
+
 remote_digest() {
-  docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}'
+  local image="$1"
+  local digest
+
+  if command -v skopeo >/dev/null 2>&1; then
+    digest=$(skopeo inspect "docker://$image" 2>/dev/null | jq -r '.Digest')
+    if [[ -n "$digest" && "$digest" != "null" ]]; then
+      echo "$digest"
+      return 0
+    fi
+  fi
+
+  docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}'
 }
 
 local_digests() {
-  docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$1" 2>/dev/null \
+  local image="$1"
+  local runtime="$2"
+  local prefix
+
+  prefix=$(compose_prefix "$runtime")
+  $prefix image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" 2>/dev/null \
     | cut -d@ -f2
 }
 
@@ -62,19 +135,27 @@ image_is_pinned() {
 }
 
 image_exists_locally() {
-  docker image inspect "$1" >/dev/null 2>&1
+  local image="$1"
+  local runtime="$2"
+  local prefix
+
+  prefix=$(compose_prefix "$runtime")
+  $prefix image inspect "$image" >/dev/null 2>&1
 }
 
 compose_needs_pull() {
+  local runtime="$1"
   local image remote
   local needs_pull=false
+  local prefix
   local -a images
 
-  images=(${(f)"$(docker compose config --images)"})
+  prefix=$(compose_prefix "$runtime")
+  images=(${(f)"$($prefix config --images)"})
 
   for image in "${images[@]}"; do
     if image_is_pinned "$image"; then
-      if ! image_exists_locally "$image"; then
+      if ! image_exists_locally "$image" "$runtime"; then
         log-status changed "Missing local image: $image"
         needs_pull=true
       fi
@@ -84,7 +165,7 @@ compose_needs_pull() {
 
     remote=$(remote_digest "$image")
 
-    if ! local_digests "$image" | grep -qx "$remote"; then
+    if ! local_digests "$image" "$runtime" | grep -qx "$remote"; then
       log-status changed "Update available: $image"
       needs_pull=true
     fi
@@ -96,7 +177,7 @@ compose_needs_pull() {
 check_compose_project() {
   local compose_file="$1"
   local result_file="$2"
-  local container_dir project_name
+  local container_dir project_name runtime
 
   container_dir=$(dirname "$compose_file")
 
@@ -106,7 +187,14 @@ check_compose_project() {
     log-status info "Checking $container_dir"
     project_name="$(basename "$container_dir")"
 
-    if compose_needs_pull; then
+    runtime=$(detect_runtime "$container_dir")
+
+    if [[ -z "$runtime" ]]; then
+      log-status warn "$project_name: no running containers found (skipping)"
+      exit 0
+    fi
+
+    if compose_needs_pull "$runtime"; then
       print -r -- "$container_dir" > "$result_file"
     else
       log-status unchanged "$project_name is up to date"
@@ -160,16 +248,23 @@ fi
 for result_file in "$TEMP_DIR"/*(Nn); do
   container_dir=$(<"$result_file")
   project_name="$(basename "$container_dir")"
+  runtime=$(detect_runtime "$container_dir")
 
+  if [[ -z "$runtime" ]]; then
+    log-status warn "$project_name: no running containers found (skipping)"
+    continue
+  fi
+
+  prefix=$(compose_prefix "$runtime")
   cd "$container_dir"
 
   if is_dry_run; then
     log-status changed "Would update $project_name"
   else
     log-status changed "Updating $project_name"
-    docker compose pull
-    docker compose down
-    docker compose up -d
+    $prefix pull
+    $prefix down
+    $prefix up -d
   fi
 done
 
