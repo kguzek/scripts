@@ -1,0 +1,15 @@
+#!/usr/bin/env zsh
+
+TARGET='root@hp'
+if [[ -n "$1" ]]; then
+  TARGET="$1"
+  shift
+fi
+
+time-script --start
+while ! s "$TARGET" "$@"; do
+  sleep 1
+  clear
+done
+
+log-status complete "Done in $(time-script --end)s"
