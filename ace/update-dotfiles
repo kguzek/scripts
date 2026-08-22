@@ -1,7 +1,14 @@
 #!/usr/bin/env zsh
 
-source ~/.zshrc
-cd ~/repos/dotfiles
-gfm
-grbm
-gpf
+DOTFILES_PATH="$HOME/repos/dotfiles"
+MAIN_BRANCH_NAME='main'
+
+zparseopts -- {h,-help,n,-dry-run}=FLAG_NOOP
+
+if [[ -n "$FLAG_NOOP" ]]; then
+  exec "$DOTFILES_PATH/postinstall.zsh" "$@"
+fi
+
+git -C "$DOTFILES_PATH" fetch origin "$MAIN_BRANCH_NAME:$MAIN_BRANCH_NAME"
+git -C "$DOTFILES_PATH" rebase "$MAIN_BRANCH_NAME"
+git -C "$DOTFILES_PATH" push --force-with-lease --force-if-includes
