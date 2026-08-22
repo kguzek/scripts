@@ -127,8 +127,8 @@ wait_for_checks() {
 }
 
 mkdir -p "$TEMPORARY_DIR_ROOT"
-tmp_dir=$(mktemp -d "$TEMPORARY_DIR_ROOT/run.XXXXXXXXXX")
-trap 'rm -rf "$tmp_dir"' EXIT
+TEMP_DIR=$(mktemp -d "$TEMPORARY_DIR_ROOT/run.XXXXXXXXXX")
+trap 'rm -rf "$TEMP_DIR"' EXIT
 
 compose_files=(/data/apps/*/compose.yaml(N) /opt/*/compose.yaml(N))
 check_failures=0
@@ -137,7 +137,7 @@ check_pids=()
 
 for compose_file in "${compose_files[@]}"; do
   check_index=$((check_index + 1))
-  check_compose_project "$compose_file" "$tmp_dir/$check_index" &
+  check_compose_project "$compose_file" "$TEMP_DIR/$check_index" &
   check_pids+=("$!")
 
   if (( ${#check_pids} >= MAX_CONCURRENT_CHECKS )); then
@@ -148,11 +148,16 @@ done
 wait_for_checks
 
 if (( check_failures > 0 )); then
-  log-status failed "$check_failures container check(s) failed"
+  if (( check_failures == 1 )); then
+    s=""
+  else
+    s="s"
+  fi
+  log-status failed "Failed to check $check_failures container$s"
   exit 1
 fi
 
-for result_file in "$tmp_dir"/*(Nn); do
+for result_file in "$TEMP_DIR"/*(Nn); do
   container_dir=$(<"$result_file")
   project_name="$(basename "$container_dir")"
 
@@ -168,10 +173,9 @@ for result_file in "$tmp_dir"/*(Nn); do
   fi
 done
 
-
 if is_dry_run; then
   updated_verb="checked for updates"
 else
   updated_verb="updated"
 fi
-  log-status complete "All containers $updated_verb in $(time-script --end)s"
+log-status complete "All containers $updated_verb in $(time-script --end)s"
