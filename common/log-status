@@ -74,7 +74,7 @@ COLOR_MODE="${${ARG_COLOR[$#ARG_COLOR]:-auto}#=}"
 case "$COLOR_MODE" in
   auto|never|always);;
   *) log-status failed "$PROGRAM_NAME: '$COLOR_MODE': invalid color mode"
-     echo "Try '$PROGRAM_NAME --help' for more information" >&2
+     echo "Try '$PROGRAM_NAME --help' for more information." >&2
      exit 2
 esac
 

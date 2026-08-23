@@ -97,11 +97,21 @@ detect_runtime() {
   ) || true
 }
 
-compose_prefix() {
-  case "$1" in
-    docker)        echo "docker compose" ;;
-    podman)        echo "podman compose" ;;
-    "sudo podman") echo "sudo podman compose" ;;
+run_compose() {
+  local runtime="$1"; shift
+  case "$runtime" in
+    docker)        docker compose "$@" ;;
+    podman)        podman compose "$@" ;;
+    "sudo podman") sudo podman compose "$@" ;;
+  esac
+}
+
+run_inspect() {
+  local runtime="$1"; shift
+  case "$runtime" in
+    docker)        docker image inspect "$@" ;;
+    podman)        podman image inspect "$@" ;;
+    "sudo podman") sudo podman image inspect "$@" ;;
   esac
 }
 
@@ -123,10 +133,8 @@ remote_digest() {
 local_digests() {
   local image="$1"
   local runtime="$2"
-  local prefix
 
-  prefix=$(compose_prefix "$runtime")
-  $prefix image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" 2>/dev/null \
+  run_inspect "$runtime" --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" 2>/dev/null \
     | cut -d@ -f2
 }
 
@@ -137,21 +145,17 @@ image_is_pinned() {
 image_exists_locally() {
   local image="$1"
   local runtime="$2"
-  local prefix
 
-  prefix=$(compose_prefix "$runtime")
-  $prefix image inspect "$image" >/dev/null 2>&1
+  run_inspect "$runtime" "$image" >/dev/null 2>&1
 }
 
 compose_needs_pull() {
   local runtime="$1"
   local image remote
   local needs_pull=false
-  local prefix
   local -a images
 
-  prefix=$(compose_prefix "$runtime")
-  images=(${(f)"$($prefix config --images)"})
+  images=(${(f)"$(run_compose "$runtime" config --images)"})
 
   for image in "${images[@]}"; do
     if image_is_pinned "$image"; then
@@ -255,16 +259,15 @@ for result_file in "$TEMP_DIR"/*(Nn); do
     continue
   fi
 
-  prefix=$(compose_prefix "$runtime")
   cd "$container_dir"
 
   if is_dry_run; then
     log-status changed "Would update $project_name"
   else
     log-status changed "Updating $project_name"
-    $prefix pull
-    $prefix down
-    $prefix up -d
+    run_compose "$runtime" pull
+    run_compose "$runtime" down
+    run_compose "$runtime" up -d
   fi
 done
 
