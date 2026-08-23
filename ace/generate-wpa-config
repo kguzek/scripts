@@ -1,0 +1,64 @@
+#!/usr/bin/env zsh
+
+PROGRAM_NAME="${0:t}"
+DEFAULT_INTERFACE_NAME='wlan0'
+
+print_help() {
+  cat <<EOF
+Usage: $PROGRAM_NAME [OPTION]... NETWORK_NAME [INTERFACE_NAME]
+
+Options:
+  -i, --list-interfaces
+        display available network interface names and exit
+  -n, --list-networks
+        display available network names and exit
+  -h, --help
+        display help message and exit
+EOF
+}
+
+zparseopts -D -- \
+  {i,-list-interfaces}=FLAG_INTERFACES \
+  {n,-list-networks}=FLAG_NETWORKS \
+  {h,-help}=FLAG_HELP
+
+if [[ -n "$FLAG_HELP" ]]; then
+  print_help
+  exit 0
+fi
+
+if [[ -n "$FLAG_NETWORKS" ]]; then
+  nmcli connection show
+  exit 0
+fi
+
+if [[ -n "$FLAG_INTERFACES" ]]; then
+  ip -oneline addr show
+  exit 0
+fi
+
+NETWORK_NAME="$1"
+INTERFACE_NAME="${2:-"$DEFAULT_INTERFACE_NAME"}"
+
+if [[ -z "$NETWORK_NAME" || -z "$INTERFACE_NAME" ]]; then
+  print_help >&2
+  exit 2
+fi
+
+if ! nmcli connection show "$NETWORK_NAME" >/dev/null 2>&1; then
+  log-status failed "$PROGRAM_NAME: '$NETWORK_NAME': invalid network name"
+  log-status info "Try 'nmcli connection show' or '$PROGRAM_NAME --help' for more information." >&2
+  exit 2
+fi
+
+CONFIG_FILENAME="/etc/wpa_supplicant/wpa_supplicant-$INTERFACE_NAME.conf"
+
+if ! touch "$CONFIG_FILENAME"; then
+  log-status failed 'This script needs to be run as someone who has permission to edit system network files. Try again with:'
+  echo "sudo $PROGRAM_NAME" >&2
+  exit 1
+fi
+
+NETWORK_PSK="$(nmcli --show-secrets connection show "$NETWORK_NAME" | grep 802-11-wireless-security.psk: | awk '{print $2}')"
+wpa_passphrase "$NETWORK_NAME" "$NETWORK_PSK" >> "$CONFIG_FILENAME"
+log-status complete "Configuration written to $CONFIG_FILENAME"
