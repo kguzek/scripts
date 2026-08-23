@@ -244,6 +244,8 @@ compose_files=(/data/apps/*/compose.yaml(N) /opt/*/compose.yaml(N))
 check_failures=0
 check_index=0
 check_pids=()
+update_failures=0
+update_errors=()
 
 for compose_file in "${compose_files[@]}"; do
   check_index=$((check_index + 1))
@@ -267,6 +269,13 @@ if (( check_failures > 0 )); then
   exit 1
 fi
 
+record_update_failure() {
+  local project="$1" step="$2"
+  log-status warn "$project: $step failed"
+  update_errors+=("$project: $step failed")
+  update_failures=$((update_failures + 1))
+}
+
 for result_file in "$TEMP_DIR"/*(Nn); do
   container_dir=$(<"$result_file")
   project_name="$(basename "$container_dir")"
@@ -283,9 +292,17 @@ for result_file in "$TEMP_DIR"/*(Nn); do
     log-status changed "Would update $project_name"
   else
     log-status changed "Updating $project_name"
-    run_compose "$runtime" pull
-    run_compose "$runtime" down
-    run_compose "$runtime" up -d
+    if ! run_compose "$runtime" pull; then
+      record_update_failure "$project_name" "pull"
+      continue
+    fi
+    if ! run_compose "$runtime" down; then
+      record_update_failure "$project_name" "down"
+      continue
+    fi
+    if ! run_compose "$runtime" up -d; then
+      record_update_failure "$project_name" "up"
+    fi
   fi
 done
 
@@ -294,4 +311,18 @@ if is_dry_run; then
 else
   updated_verb="updated"
 fi
+
+if (( update_failures > 0 )); then
+  if (( update_failures == 1 )); then
+    s=""
+  else
+    s="s"
+  fi
+  log-status failed "Failed to update $update_failures container$s:"
+  for err in "${update_errors[@]}"; do
+    log-status failed "  - $err"
+  done
+  exit 1
+fi
+
 log-status complete "All containers $updated_verb in $(time-script --end)s"
