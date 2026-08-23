@@ -122,7 +122,7 @@ get_compose_images() {
       docker compose config --images 2>/dev/null
       ;;
     *)
-      run_compose "$runtime" config 2>/dev/null | yq '.services .[] .image'
+      run_compose "$runtime" config 2>/dev/null | yq '.services .[] | select(.image != null) .image'
       ;;
   esac
 }
