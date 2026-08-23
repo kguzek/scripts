@@ -115,6 +115,18 @@ run_inspect() {
   esac
 }
 
+get_compose_images() {
+  local runtime="$1"
+  case "$runtime" in
+    docker)
+      docker compose config --images 2>/dev/null
+      ;;
+    *)
+      run_compose "$runtime" config 2>/dev/null | yq '.services .[] .image'
+      ;;
+  esac
+}
+
 remote_digest() {
   local image="$1"
   local digest
@@ -127,7 +139,8 @@ remote_digest() {
     fi
   fi
 
-  docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}'
+  digest=$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}' 2>/dev/null) || true
+  echo "$digest"
 }
 
 local_digests() {
@@ -155,7 +168,7 @@ compose_needs_pull() {
   local needs_pull=false
   local -a images
 
-  images=(${(f)"$(run_compose "$runtime" config --images)"})
+  images=(${(f)"$(get_compose_images "$runtime")"})
 
   for image in "${images[@]}"; do
     if image_is_pinned "$image"; then
@@ -168,6 +181,11 @@ compose_needs_pull() {
     fi
 
     remote=$(remote_digest "$image")
+
+    if [[ -z "$remote" ]]; then
+      log-status warn "Could not check remote digest for $image (skipping)"
+      continue
+    fi
 
     if ! local_digests "$image" "$runtime" | grep -qx "$remote"; then
       log-status changed "Update available: $image"
