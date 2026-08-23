@@ -7,15 +7,7 @@ PROGRAM_NAME="${0:t}"
 set_colors() {
   local stream="$1"
 
-  c_reset=''
-  c_green=''
-  c_yellow=''
-  c_blue=''
-  c_grey=''
-  c_red=''
-  c_purple=''
-
-  if [[ -t "$stream" ]]; then
+  if [[ "$COLOR_MODE" = 'always' || "$COLOR_MODE" = 'auto' && -t "$stream" ]]; then
     c_reset=$'\e[0m'
     c_green=$'\e[32m'
     c_yellow=$'\e[33m'
@@ -23,6 +15,14 @@ set_colors() {
     c_grey=$'\e[90m'
     c_red=$'\e[31m'
     c_purple=$'\e[35m'
+  else
+    c_reset=''
+    c_green=''
+    c_yellow=''
+    c_blue=''
+    c_grey=''
+    c_red=''
+    c_purple=''
   fi
 }
 
@@ -36,26 +36,64 @@ status_format=(
   input '[?]' c_purple
 )
 
-print_usage() {
+print_levels() {
   local i level
   local levels=()
-
-  set_colors 2
-
   for (( i = 1; i <= ${#status_format}; i += 3 )); do
     level="${status_format[$i]}"
     levels+=("${(P)status_format[$i + 2]}$level$c_reset")
   done
 
-  echo "Usage: $PROGRAM_NAME LEVEL MESSAGE..." >&2
-  echo "       $PROGRAM_NAME numbered NUMBER MESSAGE..." >&2
-  echo
-  echo "Available levels: ${(j:, :)levels}" >&2
+  printf "%s\n" "$levels"
 }
+
+print_help() {
+  local -a levels=($(print_levels))
+  cat <<EOF
+Usage: $PROGRAM_NAME [OPTION]... LEVEL MESSAGE...
+       $PROGRAM_NAME [OPTION]... numbered NUMBER MESSAGE...
+where LEVEL := { ${(j: | :)levels} }
+
+Options:
+  -c, --color=COLOR_MODE
+        control when to use colored output; default is 'auto', which uses colors if stdout is a TTY
+        where COLOR_MODE := { never | always | auto }
+  -l, --list-levels
+        display space-delimited list of available log levels and exit
+  -h, --help
+        display help message and exit
+EOF
+}
+
+zparseopts -D -- \
+  {h,-help}=FLAG_HELP \
+  {l,-list-levels}=FLAG_LIST \
+  {c,-color}:=ARG_COLOR
+
+COLOR_MODE="${${ARG_COLOR[$#ARG_COLOR]:-auto}#=}"
+case "$COLOR_MODE" in
+  auto|never|always);;
+  *) log-status failed "$PROGRAM_NAME: '$COLOR_MODE': invalid color mode"
+     echo "Try '$PROGRAM_NAME --help' for more information" >&2
+     exit 2
+esac
+
+if [[ -n "$FLAG_HELP" ]]; then
+  set_colors 1
+  print_help
+  exit 0
+fi
+
+if [[ -n "$FLAG_LIST" ]]; then
+  set_colors 1
+  print_levels
+  exit 0
+fi
 
 if [[ "$1" == numbered ]]; then
   if [[ $# -lt 3 ]]; then
-    print_usage
+    set_colors 2
+    print_help >&2
     exit 2
   fi
 
@@ -69,8 +107,8 @@ if [[ "$1" == numbered ]]; then
 fi
 
 if [[ $# -lt 2 || "$1" == -h || "$1" == --help ]]; then
-  print_usage
-  [[ "$1" == -h || "$1" == --help ]] && exit 0
+  set_colors 2
+  print_help >&2
   exit 2
 fi
 
