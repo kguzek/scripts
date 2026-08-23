@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-
-sudo systemctl stop transmission-daemon
-sudo vi /var/lib/transmission-daemon/info/settings.json
-sudo systemctl start transmission-daemon
-
