@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+udevadm monitor --udev --subsystem-match=input --property | while read -r line; do
+
+  if [[ "$line" =~ ^UDEV.*\ ([[:alpha:]]+)\ .*/devices/ ]]; then
+    action="${BASH_REMATCH[1]}"
+
+    case "$action" in
+      add) state="Connected" ;;
+      remove) state="Disconnected" ;;
+      *) log-status warn "Unknown device action: '$action'"; continue ;;
+    esac
+    continue
+  fi
+
+  title_prefix=""
+  if [[ "$line" =~ ^NAME=\"(.*)\"$ ]]; then
+    device_name="${BASH_REMATCH[1]}"
+  else
+    continue
+  fi
+
+  if [[ "$line" =~ [[:space:]]+Mouse[[:space:]]+Keyboard\"$ ]]; then
+    continue
+  fi
+
+  if [[ "$line" =~ [[:space:]]*([^[:space:]]+)\"$ ]]; then
+    last_word="${BASH_REMATCH[1]}"
+    remove_last_word='false'
+
+    case "$last_word" in
+      '(AVRCP)') title_prefix="󰋋 "; remove_last_word='true';;
+      'Mouse') title_prefix="󰍽 ";;
+      'Keyboard') title_prefix="󰌌 ";;
+    esac
+
+    if [ "$remove_last_word" == 'true' ]; then
+      device_name="${device_name%${last_word}}"
+    fi
+  fi
+  notify-send --expire-time 5000 "$title_prefix$device_name" "$state"
+done
