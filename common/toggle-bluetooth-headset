@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+HEADSET_MAC_ADDRESS='44:5E:CD:5F:8D:91'
+
+if [ -z "$(bluetoothctl devices Connected)" ]; then
+  bluetoothctl connect "$HEADSET_MAC_ADDRESS"
+else
+  bluetoothctl disconnect
+fi
