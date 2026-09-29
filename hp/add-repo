@@ -101,7 +101,7 @@ DEPLOY_COMMAND=$(log-status input 'Post-push deploy command: ')
 SETTINGS_FILE='/data/apps/Git-Auto-Deploy/config.json'
 SECRET_TOKEN=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 20 | head -n 1)
 NEW_REPO_ENTRY="{
-  \"url\": \"$REPO_URL.git\",
+  \"url\": \"$CLONE_URL\",
   \"branch\": \"main\",
   \"path\": \"$APP_DIR\",
   \"deploy\": $(jq -n --arg var "$DEPLOY_COMMAND" '$var'),
