@@ -1,37 +1,105 @@
-#!/bin/bash
+#!/usr/bin/env zsh
+
+set -e
 
 WEBHOOK_PAYLOAD_URL='https://ci.guzek.uk'
+DEFAULT_FORGEJO_OWNER='kguzek'
+PROGRAM_NAME="${0:t}"
 
-REPO_NAME="$1"
-REPO_OWNER="${2:-kguzek}"
+print_help() {
+  cat <<EOF
+Usage: $PROGRAM_NAME [OPTION]... REPOSITORY
+where REPOSITORY := { REPO | OWNER/REPO | HOST/OWNER/REPO }
 
-if [[ -z "$REPO_NAME" || ! "$REPO_NAME" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
-	log-status failed "Invalid repository name '$REPO_NAME'"
-  exit 1
+Options:
+  --help, -h
+        display help message and exit
+EOF
+}
+
+zparseopts -D -- \
+  {h,-help}=FLAG_HELP
+
+if [[ -n "$FLAG_HELP" ]]; then
+  print_help
+  exit 0
 fi
 
-APP_DIR="/data/apps/$REPO_NAME"
-if [ -d $APP_DIR ]; then
-	log-status unchanged "Skipping clone (directory exists)"
+if (( $# != 1 )); then
+  log-status failed "$PROGRAM_NAME: expected exactly one repository reference"
+  print_help >&2
+  exit 2
+fi
+
+REPOSITORY_REFERENCE="$1"
+if [[ "$REPOSITORY_REFERENCE" != */* ]]; then
+  PROVIDER='forgejo'
+  REPO_OWNER="$DEFAULT_FORGEJO_OWNER"
+  REPO_NAME="$REPOSITORY_REFERENCE"
+elif [[ "${REPOSITORY_REFERENCE#*/}" != */* ]]; then
+  PROVIDER='forgejo'
+  REPO_OWNER="${REPOSITORY_REFERENCE%%/*}"
+  REPO_NAME="${REPOSITORY_REFERENCE#*/}"
+elif [[ "${REPOSITORY_REFERENCE#*/*/}" != */* ]]; then
+  PROVIDER_HOST="${REPOSITORY_REFERENCE%%/*}"
+  REPO_OWNER_AND_NAME="${REPOSITORY_REFERENCE#*/}"
+  REPO_OWNER="${REPO_OWNER_AND_NAME%%/*}"
+  REPO_NAME="${REPO_OWNER_AND_NAME#*/}"
+
+  case "$PROVIDER_HOST" in
+    git.guzek.uk) PROVIDER='forgejo' ;;
+    github.com) PROVIDER='github' ;;
+    *)
+      log-status failed "$PROGRAM_NAME: '$PROVIDER_HOST': unsupported repository host"
+      exit 2
+      ;;
+  esac
 else
-  if ! git clone git@github.com:$REPO_OWNER/$REPO_NAME $APP_DIR; then
-	  log-status failed "Failed to clone repository"
+  log-status failed "$PROGRAM_NAME: '$REPOSITORY_REFERENCE': invalid repository reference"
+  exit 2
+fi
+
+if [[ ! "$REPO_OWNER" =~ ^[a-zA-Z0-9_.-]+$ || ! "$REPO_NAME" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
+  log-status failed "$PROGRAM_NAME: '$REPOSITORY_REFERENCE': invalid repository reference"
+  exit 2
+fi
+
+case "$PROVIDER" in
+  forgejo)
+    PROVIDER_NAME='Forgejo'
+    CLONE_URL="git@ssh-git.guzek.uk:$REPO_OWNER/$REPO_NAME.git"
+    REPO_URL="https://git.guzek.uk/$REPO_OWNER/$REPO_NAME"
+    WEBHOOK_SETTINGS_URL="$REPO_URL/settings/hooks/forgejo/new"
+    ;;
+  github)
+    PROVIDER_NAME='GitHub'
+    CLONE_URL="git@github.com:$REPO_OWNER/$REPO_NAME.git"
+    REPO_URL="https://github.com/$REPO_OWNER/$REPO_NAME"
+    WEBHOOK_SETTINGS_URL="$REPO_URL/settings/hooks/new"
+    ;;
+esac
+
+APP_DIR="/data/apps/$REPO_NAME"
+if [[ -d "$APP_DIR" ]]; then
+  log-status unchanged "Skipping clone (directory exists)"
+else
+  if ! git clone "$CLONE_URL" "$APP_DIR"; then
+    log-status failed "Failed to clone repository"
     exit 2
-	fi
+  fi
   log-status changed "Cloned repository successfully"
 fi
 
-if ! git config --global --get-all safe.directory | grep $APP_DIR >/dev/null; then
-	git config --global --add safe.directory $APP_DIR
-	log-status changed "Added $APP_DIR to the list of safe git directories"
+if ! git config --global --get-all safe.directory | grep -Fx -- "$APP_DIR" >/dev/null; then
+  git config --global --add safe.directory "$APP_DIR"
+  log-status changed "Added $APP_DIR to the list of safe git directories"
 fi
 # sudo chown -R konrad:gad $APP_DIR
-chmod -R g+rw $APP_DIR
+chmod -R g+rw "$APP_DIR"
 
 DEPLOY_COMMAND=$(log-status input 'Post-push deploy command: ')
 SETTINGS_FILE='/data/apps/Git-Auto-Deploy/config.json'
 SECRET_TOKEN=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 20 | head -n 1)
-REPO_URL="https://github.com/$REPO_OWNER/$REPO_NAME"
 NEW_REPO_ENTRY="{
   \"url\": \"$REPO_URL.git\",
   \"branch\": \"main\",
@@ -40,24 +108,23 @@ NEW_REPO_ENTRY="{
   \"secret-token\": \"$SECRET_TOKEN\"
 }"
 TEMP_SETTINGS_FILE="$SETTINGS_FILE.new"
-SETTINGS_WITHOUT_REPOSITORIES=$(sed -n '1,/"repositories":/{\/\"repositories\":/!p}' "$SETTINGS_FILE")
+SETTINGS_WITHOUT_REPOSITORIES=$(sed -n '1,/"repositories":/{\/"repositories":/!p}' "$SETTINGS_FILE")
 PREVIOUS_REPOSITORIES=$(sed -n '/"repositories":/,$p' "$SETTINGS_FILE")
-if [ -z "$PREVIOUS_REPOSITORIES" ]; then
-	log-status failed "Could not parse the repositories field."
+if [[ -z "$PREVIOUS_REPOSITORIES" ]]; then
+  log-status failed "Could not parse the repositories field."
   exit 3
 fi
 PREVIOUS_REPOSITORIES="{$PREVIOUS_REPOSITORIES"
 
 if ! echo "$PREVIOUS_REPOSITORIES" | jq -e ".repositories | map(.path != \"$APP_DIR\") | all" >/dev/null; then
-	echo "$PREVIOUS_REPOSITORIES"
-	log-status failed "This repository has already been added to the CI/CD pipeline."
+  echo "$PREVIOUS_REPOSITORIES"
+  log-status failed "This repository has already been added to the CI/CD pipeline."
   exit 4
 fi
 
-UPDATED_REPOSITORIES=$(echo "$PREVIOUS_REPOSITORIES" | jq ".repositories += [$NEW_REPO_ENTRY]" | sed '1d')
-if [ $? -ne 0 ]; then
-	echo "$PREVIOUS_REPOSITORIES"
-	log-status failed "Failed to parse settings file."
+if ! UPDATED_REPOSITORIES=$(echo "$PREVIOUS_REPOSITORIES" | jq ".repositories += [$NEW_REPO_ENTRY]" | sed '1d'); then
+  echo "$PREVIOUS_REPOSITORIES"
+  log-status failed "Failed to parse settings file."
   exit 5
 fi
 echo "$SETTINGS_WITHOUT_REPOSITORIES" > "$TEMP_SETTINGS_FILE"
@@ -66,9 +133,8 @@ echo "$UPDATED_REPOSITORIES" >> "$TEMP_SETTINGS_FILE"
 
 mv "$TEMP_SETTINGS_FILE" "$SETTINGS_FILE"
 log-status complete "Successfully created repository CI/CD configuration"
-WEBHOOK_SETTINGS_URL="$REPO_URL/settings/hooks/new"
-log-status info "Open the GitHub webhook configuration page: $WEBHOOK_SETTINGS_URL"
-log-status info "GitHub Webhook Payload URL: $WEBHOOK_PAYLOAD_URL"
-log-status info "GitHub Webhook Secret: $SECRET_TOKEN"
+log-status info "Open the $PROVIDER_NAME webhook configuration page: $WEBHOOK_SETTINGS_URL"
+log-status info "Webhook Payload URL: $WEBHOOK_PAYLOAD_URL"
+log-status info "Webhook Secret: $SECRET_TOKEN"
 log-status info "Restarting the Git Auto Deploy service for the updated configuration to take effect. You may be prompted for escalated privileges. After restart, create the webhook integration by following the above URL and entering the provided details, and keeping the remaining settings at their default values."
 sudo systemctl restart gitautodeploy.service
