@@ -74,6 +74,12 @@ if [[ -n "${MAC_ADDRESSES[$TARGET]}" ]]; then
 
   dig_output="$(dig +short "$TARGET.guzek.uk")"
   dig_responses=("${(f)dig_output}")
+
+  if [[ -z "$dig_responses" ]]; then
+    log-status failed "Could not resolve address for $TARGET.guzek.uk"
+    exit 2
+  fi
+
   log-status info "Resolved address: $TARGET.guzek.uk -> ${${(j: -> :)dig_responses}//. / }"
   NETWORK_IP_ADDRESS="${dig_responses[-1]}"
   wake_output=$("$WAKE_COMMAND" -i "$NETWORK_IP_ADDRESS" -p "$wol_external_port" "$mac_address")
