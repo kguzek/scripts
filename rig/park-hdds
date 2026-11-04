@@ -1,0 +1,17 @@
+#!/bin/sh
+# Spin down and detach the unused HDDs (WD Blue "Storage", HGST "Warehouse").
+# Detached disks stay asleep until reboot or a SCSI rescan.
+#
+# Install as a boot service:
+#   sudo install -m755 park-hdds /usr/local/bin/park-hdds
+#   sudo install -m644 park-hdds.service /etc/systemd/system/park-hdds.service
+#   sudo systemctl enable --now park-hdds
+#
+# Bring disks back now:   echo "- - -" | sudo tee /sys/class/scsi_host/host*/scan
+# Stop doing it at boot:  sudo systemctl disable park-hdds
+for id in ata-WDC_WD10EZEX-00WN4A0_WD-WCC6Y6SKFKA5 ata-HGST_HTS541010A9E680_JD100A1V3NN5TM; do
+  [ -e "/dev/disk/by-id/$id" ] || continue
+  dev=$(readlink -f "/dev/disk/by-id/$id")
+  smartctl -s standby,now "$dev" >/dev/null
+  echo 1 > "/sys/block/${dev##*/}/device/delete"
+done

@@ -1,0 +1,10 @@
+[Unit]
+Description=Spin down and detach unused HDDs
+# To undo: systemctl disable park-hdds, then: echo "- - -" | tee /sys/class/scsi_host/host*/scan
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/park-hdds
+
+[Install]
+WantedBy=multi-user.target
