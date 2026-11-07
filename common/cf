@@ -39,11 +39,11 @@ Commands:
   dns [DOMAIN] [-x TYPE ...]
         List DNS records (optionally scoped to a domain)
   dns [DOMAIN] add NAME [--type TYPE] TARGET
-        Add a DNS record, default type A
+        Add a DNS record, default type A; TXT allows distinct values for one name
   dns [DOMAIN] edit RECORD [--type TYPE] TARGET
         Edit a DNS record by name or number
-  dns [DOMAIN] delete|remove RECORD
-        Delete a DNS record by name or number
+  dns [DOMAIN] delete|remove RECORD [--type TYPE --content CONTENT]
+        Delete a DNS record by name or number; selectors must match exactly one record
 
 Options:
   --help, -h
@@ -812,6 +812,22 @@ add_dns_record() {
   find_zone_for_hostname "$hostname"
   find_dns_record_for_hostname "$hostname" "$type"
 
+  if [[ "$type" == TXT && -n "$found_dns_record_id" ]]; then
+    local response
+    response="$(cf_api GET "$(dns_records_path "$found_zone_id")")"
+    require_success "$response" "Failed to list DNS records for $found_zone_name"
+    if jq -e --arg name "$hostname" --arg content "$target" '
+      any(.result[]?; (.name | ascii_downcase) == ($name | ascii_downcase)
+          and .type == "TXT" and .content == $content)
+    ' >/dev/null <<< "$response"; then
+      log-status unchanged "DNS TXT record already exists for $hostname with this content"
+      return
+    fi
+    create_dns_record "$hostname" "$type" "$target"
+    refresh_dns_cache_if_fresh
+    return
+  fi
+
   if [[ -n "$found_dns_record_id" ]]; then
     fail "DNS $type record already exists for $hostname in $found_zone_name"
   fi
@@ -845,22 +861,47 @@ edit_dns_record() {
 
 delete_any_dns_record() {
   local record_target="$1"
+  shift
+  local selected_type='' selected_content='' has_content=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --type|--content)
+        [[ $# -ge 2 ]] || fail "Missing value after $1"
+        if [[ "$1" == --type ]]; then
+          selected_type="$(normalize_dns_type "$2")"
+        else
+          selected_content="$2"
+          has_content=true
+        fi
+        shift 2
+        ;;
+      *) fail "Unknown DNS delete option: $1" ;;
+    esac
+  done
   local hostname content
 
   if [[ "$record_target" == <-> && "$record_target" -gt 0 ]]; then
+    [[ -z "$selected_type" && "$has_content" == false ]] || fail "Selectors require a hostname, not a record number"
     resolve_cached_dns_number "$record_target"
     hostname="$cached_dns_record_name"
     content="$cached_dns_record_content"
   else
     hostname="$record_target"
     find_zone_for_hostname "$hostname"
-    find_dns_record_for_hostname "$hostname"
-
-    if [[ -z "$found_dns_record_id" ]]; then
-      fail "No DNS record for $hostname in $found_zone_name"
-    fi
-
-    content="$found_dns_record_content"
+    local response matches count
+    response="$(cf_api GET "$(dns_records_path "$found_zone_id")")"
+    require_success "$response" "Failed to list DNS records for $found_zone_name"
+    matches="$(jq --arg name "$hostname" --arg type "$selected_type" \
+      --arg content "$selected_content" --argjson has_content "$has_content" '
+      [.result[]? | select((.name | ascii_downcase) == ($name | ascii_downcase))
+       | select($type == "" or .type == $type)
+       | select(($has_content | not) or .content == $content)]
+    ' <<< "$response")"
+    count="$(jq 'length' <<< "$matches")"
+    [[ "$count" -gt 0 ]] || fail "No matching DNS record for $hostname in $found_zone_name"
+    [[ "$count" == 1 ]] || fail "Multiple DNS records match $hostname; use --type and --content to select exactly one"
+    found_dns_record_id="$(jq -r '.[0].id' <<< "$matches")"
+    content="$(jq -r '.[0].content' <<< "$matches")"
   fi
 
   remove_found_dns_record "$hostname" "$content"
@@ -1290,11 +1331,11 @@ case "${1:-}" in
             ;;
           delete|remove)
             shift
-            if [[ $# -ne 1 ]]; then
+            if [[ $# -lt 1 ]]; then
               print_usage >&2
               exit 2
             fi
-            delete_any_dns_record "$1"
+            delete_any_dns_record "$@"
             ;;
           *)
             list_dns_records
@@ -1352,15 +1393,17 @@ case "${1:-}" in
             ;;
           delete|remove)
             shift
-            if [[ $# -ne 1 ]]; then
+            if [[ $# -lt 1 ]]; then
               print_usage >&2
               exit 2
             fi
             if [[ "$1" == <-> && "$1" -gt 0 ]]; then
+              [[ $# == 1 ]] || fail "Selectors require a hostname, not a record number"
               resolve_cached_zone_dns_number "$found_zone_id" "$1"
-              delete_any_dns_record "$cached_dns_record_name"
+              remove_found_dns_record "$cached_dns_record_name" "$cached_dns_record_content"
+              refresh_dns_cache_if_fresh
             else
-              delete_any_dns_record "$1"
+              delete_any_dns_record "$@"
             fi
             refresh_zone_dns_cache_if_fresh
             ;;
