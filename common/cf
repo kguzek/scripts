@@ -278,12 +278,20 @@ load_cached_config() {
   return 0
 }
 
-require_cached_config() {
-  if load_cached_config; then
-    return
+load_route_config() {
+  local route_target="${1:-}"
+  local response
+
+  load_cached_config && return
+
+  if [[ "$route_target" == <-> && "$route_target" -gt 0 ]]; then
+    fail "Route cache is missing or older than 10 minutes for $found_tunnel_name; run '$PROGRAM_NAME routes $found_tunnel_name' first"
   fi
 
-  fail "Route cache is missing or older than 10 minutes for $found_tunnel_name; run '$PROGRAM_NAME routes $found_tunnel_name' first"
+  response="$(cf_api GET "$(tunnel_config_path "$found_tunnel_id")")"
+  require_success "$response" "Failed to load routes for tunnel: $found_tunnel_name"
+  write_route_cache "$response"
+  cached_config="$(jq '.result.config // {}' <<< "$response")"
 }
 
 write_dns_cache() {
@@ -308,7 +316,8 @@ write_dns_cache() {
           | map(.value + {number: (.key + 1)})
         )
       }
-    ' > "$cache_file"
+    ' > "$cache_file.$$"
+  mv "$cache_file.$$" "$cache_file"
 }
 
 resolve_cached_dns_number() {
@@ -509,6 +518,13 @@ refresh_dns_cache_if_fresh() {
   write_dns_cache "$fetched_dns_records"
 }
 
+refresh_stale_dns_cache_in_background() {
+  is_cache_fresh "$(dns_cache_path)" && return
+
+  # Detached so that listing every zone does not delay the command
+  { fetch_dns_records && write_dns_cache "$fetched_dns_records" } &>/dev/null &!
+}
+
 list_dns_records() {
   local record_count record_number jq_exclude
 
@@ -614,7 +630,8 @@ write_zone_dns_cache() {
         | map(.value + {number: (.key + 1)})
       )
     }
-  ' > "$cache_file"
+  ' > "$cache_file.$$"
+  mv "$cache_file.$$" "$cache_file"
 }
 
 list_zone_dns_records() {
@@ -697,6 +714,15 @@ refresh_zone_dns_cache_if_fresh() {
 
   fetch_zone_dns_records "$found_zone_id" "$found_zone_name"
   write_zone_dns_cache "$found_zone_id" "$fetched_zone_dns_records"
+}
+
+refresh_stale_zone_dns_cache_in_background() {
+  is_cache_fresh "$(dns_zone_cache_path "$found_zone_id")" && return
+
+  {
+    fetch_zone_dns_records "$found_zone_id" "$found_zone_name" &&
+      write_zone_dns_cache "$found_zone_id" "$fetched_zone_dns_records"
+  } &>/dev/null &!
 }
 
 normalize_dns_type() {
@@ -1048,7 +1074,7 @@ delete_route() {
   local config new_config payload update_response deleted_hostname deleted_service deleted_route
 
   find_tunnel "$selector"
-  require_cached_config
+  load_route_config "$route_target"
   config="$cached_config"
 
   if [[ "$route_target" == <-> && "$route_target" -gt 0 ]] && resolve_cached_route_number "$route_target"; then
@@ -1121,7 +1147,7 @@ edit_route() {
   local config new_config payload update_response existing_route existing_hostname existing_service duplicate
 
   find_tunnel "$selector"
-  require_cached_config
+  load_route_config "$route_target"
   config="$cached_config"
 
   if [[ "$route_target" == <-> && "$route_target" -gt 0 ]] && resolve_cached_route_number "$route_target"; then
@@ -1217,7 +1243,7 @@ add_route() {
   local duplicate config new_config payload update_response
 
   find_tunnel "$selector"
-  require_cached_config
+  load_route_config
   config="$cached_config"
 
   duplicate="$(jq -r --arg hostname "$hostname" '
@@ -1341,6 +1367,7 @@ case "${1:-}" in
             list_dns_records
             ;;
         esac
+        refresh_stale_dns_cache_in_background
         ;;
       *)
         # Domain-scoped operations
@@ -1411,6 +1438,7 @@ case "${1:-}" in
             list_zone_dns_records "$found_zone_id" "$found_zone_name"
             ;;
         esac
+        refresh_stale_zone_dns_cache_in_background
         ;;
     esac
     ;;
