@@ -1,0 +1,16 @@
+#!/bin/bash
+set -euo pipefail
+set -a; source ~root/.config/proxmox-backup/env; set +a
+
+proxmox-backup-client backup \
+  root.pxar:/ \
+  data.pxar:/data \
+  boot.pxar:/boot \
+  --keyfile ~root/.config/proxmox-backup/encryption-key.json \
+  --exclude /data/transmission/downloads \
+  --exclude /data/.pnpm-store \
+  --exclude /var/lib/containers/storage/overlay \
+  --exclude '/home/*/.local/share/containers/storage/overlay' \
+  --exclude '/home/*/.cache' --exclude '/home/*/.npm' \
+  --exclude '/home/*/.nvm' --exclude '/home/*/.vscode-server' \
+  --exclude /var/cache --exclude /var/tmp --exclude /tmp
