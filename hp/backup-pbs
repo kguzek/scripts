@@ -1,16 +1,45 @@
 #!/bin/bash
 set -euo pipefail
-set -a; source ~root/.config/proxmox-backup/env; set +a
 
+VG=fedora
+SNAPSHOT_SUFFIX=pbs-snapshot
+SNAPSHOT_ROOT=/run/backup-pbs
+declare -A SNAPSHOT_SIZES=([root]=10G [data]=20G)
+
+cleanup() {
+  for lv in "${!SNAPSHOT_SIZES[@]}"; do
+    mountpoint -q "$SNAPSHOT_ROOT/$lv" && umount "$SNAPSHOT_ROOT/$lv"
+    lvs "$VG/$lv-$SNAPSHOT_SUFFIX" &>/dev/null && lvremove -fy "$VG/$lv-$SNAPSHOT_SUFFIX" >/dev/null
+  done
+  true
+}
+trap cleanup EXIT
+cleanup # remove leftovers from an interrupted run
+
+# crash-consistent point-in-time copies, so running databases are captured safely
+for lv in "${!SNAPSHOT_SIZES[@]}"; do
+  lvcreate --snapshot --size "${SNAPSHOT_SIZES[$lv]}" --name "$lv-$SNAPSHOT_SUFFIX" "$VG/$lv" >/dev/null
+  snapshot_device="/dev/$VG/$lv-$SNAPSHOT_SUFFIX"
+  mount_options=ro
+  # XFS refuses to mount a second filesystem with the same UUID
+  [[ "$(blkid -o value -s TYPE "$snapshot_device")" == xfs ]] && mount_options+=,nouuid
+  mkdir -p "$SNAPSHOT_ROOT/$lv"
+  mount -o "$mount_options" "$snapshot_device" "$SNAPSHOT_ROOT/$lv"
+done
+
+source ~root/.config/proxmox-backup/.env
+
+# exclude paths are relative to each archive's root, and apply to every archive
 proxmox-backup-client backup \
-  root.pxar:/ \
-  data.pxar:/data \
+  root.pxar:"$SNAPSHOT_ROOT/root" \
+  data.pxar:"$SNAPSHOT_ROOT/data" \
   boot.pxar:/boot \
   --keyfile ~root/.config/proxmox-backup/encryption-key.json \
-  --exclude /data/transmission/downloads \
-  --exclude /data/.pnpm-store \
+  --exclude /transmission/downloads \
+  --exclude /.pnpm-store \
   --exclude /var/lib/containers/storage/overlay \
   --exclude '/home/*/.local/share/containers/storage/overlay' \
+  --exclude '/home/*/.local/share/containers/storage/volumes/*dind*' \
   --exclude '/home/*/.cache' --exclude '/home/*/.npm' \
   --exclude '/home/*/.nvm' --exclude '/home/*/.vscode-server' \
   --exclude /var/cache --exclude /var/tmp --exclude /tmp
