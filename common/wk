@@ -2,7 +2,6 @@
 
 set -e
 
-TARGET="$1"
 PROGRAM_NAME="${0:t}"
 
 declare -A MAC_ADDRESSES=(
@@ -26,30 +25,40 @@ print_hint() {
 }
 
 print_usage() {
-  echo "Usage: $PROGRAM_NAME [OPTION] TARGET"
+  echo "Usage: $PROGRAM_NAME [OPTION]... TARGET"
   echo "where TARGET := { ${(j: | :)TARGETS} }"
   echo
   echo 'Options:'
+  echo '  --lan, -L'
+  echo '        broadcast the wake packet on the local network instead of'
+  echo '        sending it to the external address and port'
   echo '  --list, -l'
   echo '        display a space-separated list of available targets and exit'
   echo '  --help, -h'
   echo '        display help message and exit'
 }
 
-if [ -z "$TARGET" ]; then
-  log-status failed "$PROGRAM_NAME: missing target" >&2
-  print_hint
-  exit 1
-fi
+zparseopts -D -E -- \
+  {L,-lan}=FLAG_LAN \
+  {l,-list}=FLAG_LIST \
+  {h,-help}=FLAG_HELP
 
-if [ "$TARGET" = '-h' ] || [ "$TARGET" = '--help' ]; then
+TARGET="$1"
+
+if [[ -n "$FLAG_HELP" ]]; then
   print_usage
   exit 0
 fi
 
-if [ "$TARGET" = '-l' ] || [ "$TARGET" = '--list' ]; then
+if [[ -n "$FLAG_LIST" ]]; then
   echo "${(j: :)TARGETS}"
   exit 0
+fi
+
+if [ -z "$TARGET" ]; then
+  log-status failed "$PROGRAM_NAME: missing target" >&2
+  print_hint
+  exit 1
 fi
 
 command_exists() {
@@ -67,6 +76,14 @@ fi
 
 if [[ -n "${MAC_ADDRESSES[$TARGET]}" ]]; then
   mac_address="${MAC_ADDRESSES[$TARGET]}"
+
+  if [[ -n "$FLAG_LAN" ]]; then
+    wake_output=$("$WAKE_COMMAND" "$mac_address")
+    log-status info "$wake_output"
+    log-status complete "Successfully broadcast wake packet to $TARGET on the local network"
+    exit 0
+  fi
+
   wol_external_port="${WOL_EXTERNAL_PORTS[$TARGET]}"
 
   if [[ -z "$wol_external_port" ]]; then
