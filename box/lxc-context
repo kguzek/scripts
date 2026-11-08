@@ -9,16 +9,13 @@ print_help() {
   cat <<EOF
 Usage: $PROGRAM_NAME [OPTION]... CONTAINER
 where CONTAINER := { NAME | ID }
-
-Create or update the Docker context NAME in the doco-cd container ($DOCO_CD_ID), pointing at
-ssh://root@IP of CONTAINER. The container's SSH host key is read directly from it and pinned
-in doco-cd's known_hosts, so nothing is trusted on first use.
+Create the Docker context NAME in doco-cd ($DOCO_CD_ID), pinning the container's SSH host key.
 
 Options:
   -r, --remove
-        remove the context and the pinned host key instead
+        remove the context and its host key
   -d, --dry-run
-        print the commands that would change anything instead of running them
+        print commands instead of running them
   -h, --help
         display help message and exit
 EOF
@@ -26,6 +23,10 @@ EOF
 
 doco() {
   run pct exec "$DOCO_CD_ID" -- "$@"
+}
+
+has_context() {
+  pct exec "$DOCO_CD_ID" -- docker context inspect "$1" >/dev/null 2>&1
 }
 
 zparseopts -D -E -- \
@@ -46,86 +47,62 @@ fi
 
 DRY_RUN="${FLAG_DRY_RUN:+1}"
 
-require() {
-  local message="$1"
-  if [[ -n "$DRY_RUN" ]]; then
-    log-status warn "$PROGRAM_NAME: $message (ignored for --dry-run)"
-  else
-    log-status failed "$PROGRAM_NAME: $message"
-    exit 1
-  fi
-}
-
 if ! pct status "$DOCO_CD_ID" 2>/dev/null | grep -q running; then
-  require "doco-cd container $DOCO_CD_ID is not running"
-elif ! pct exec "$DOCO_CD_ID" -- test -f /root/.ssh/id_ed25519; then
-  require "doco-cd container $DOCO_CD_ID has no /root/.ssh/id_ed25519"
+  log-status failed "$PROGRAM_NAME: doco-cd ($DOCO_CD_ID) is not running"
+  exit 1
 fi
 
 ID="$(resolve_lxc "$1")"
-if [[ -z "$ID" ]]; then
-  if [[ -n "$DRY_RUN" && "$1" == <-> ]]; then
-    ID="$1"
-    NAME="${DRY_RUN_NAME:-ct$ID}"
-    IP="$SUBNET_PREFIX.$ID"
-  elif [[ -n "$FLAG_REMOVE" && "$1" != <-> ]]; then
-    # the container may already be gone; the context is named after it
-    NAME="$1"
-    IP=''
-  else
-    log-status failed "$PROGRAM_NAME: '$1': no such container"
-    exit 1
-  fi
-else
+if [[ -n "$ID" ]]; then
   NAME="$(lxc_name_of "$ID")"
   IP="$(lxc_ip_of "$ID")"
+elif [[ -n "$FLAG_REMOVE" && "$1" != <-> ]]; then
+  NAME="$1"
+else
+  log-status failed "$PROGRAM_NAME: '$1': no such container"
+  exit 1
 fi
 
 if [[ -n "$FLAG_REMOVE" ]]; then
-  if pct exec "$DOCO_CD_ID" -- docker context inspect "$NAME" >/dev/null 2>&1; then
-    if [[ -z "$IP" ]]; then
-      IP="$(pct exec "$DOCO_CD_ID" -- docker context inspect "$NAME" --format '{{.Endpoints.docker.Host}}' | sed 's|^ssh://[^@]*@||')"
-    fi
-    log-status info "Removing Docker context $NAME"
-    doco docker context rm --force "$NAME" >/dev/null
-  else
+  if ! has_context "$NAME"; then
     log-status unchanged "No Docker context named $NAME"
+    exit 0
   fi
-  if [[ -n "$IP" ]]; then
-    doco ssh-keygen -R "$IP" >/dev/null 2>&1 || true
+  if [[ -z "$IP" ]]; then
+    IP="$(pct exec "$DOCO_CD_ID" -- docker context inspect "$NAME" --format '{{.Endpoints.docker.Host}}')"
+    IP="${IP#ssh://*@}"
   fi
-  log-status complete "Removed $NAME from doco-cd"
+  doco docker context rm --force "$NAME" >/dev/null
+  doco sh -c "ssh-keygen -R '$IP' >/dev/null 2>&1 || true"
+  log-status complete "Removed Docker context $NAME"
   exit 0
 fi
 
 if [[ -z "$IP" ]]; then
-  log-status failed "$PROGRAM_NAME: container $ID has no static IP in net0"
+  log-status failed "$PROGRAM_NAME: $NAME has no static IP"
+  exit 1
+fi
+if ! pct exec "$DOCO_CD_ID" -- test -f /root/.ssh/id_ed25519; then
+  log-status failed "$PROGRAM_NAME: doco-cd has no /root/.ssh/id_ed25519"
   exit 1
 fi
 
-if [[ -z "$DRY_RUN" ]]; then
-  HOST_KEY="$(pct exec "$ID" -- cat /etc/ssh/ssh_host_ed25519_key.pub | awk '{ print $1, $2 }')"
-  if [[ -z "$HOST_KEY" ]]; then
-    log-status failed "$PROGRAM_NAME: could not read the SSH host key of $NAME ($ID)"
-    exit 1
-  fi
-else
-  HOST_KEY='ssh-ed25519 <host key of the container>'
+HOST_KEY="$(pct exec "$ID" -- cat /etc/ssh/ssh_host_ed25519_key.pub | awk '{ print $1, $2 }')"
+if [[ -z "$HOST_KEY" ]]; then
+  log-status failed "$PROGRAM_NAME: could not read the SSH host key of $NAME"
+  exit 1
 fi
 
-log-status info "Pinning SSH host key of $NAME ($IP)"
-doco ssh-keygen -R "$IP" >/dev/null 2>&1 || true
+doco sh -c "ssh-keygen -R '$IP' >/dev/null 2>&1 || true"
 doco sh -c "echo '$IP $HOST_KEY' >> /root/.ssh/known_hosts"
 
-if pct exec "$DOCO_CD_ID" -- docker context inspect "$NAME" >/dev/null 2>&1; then
-  log-status info "Updating Docker context $NAME -> ssh://root@$IP"
+if has_context "$NAME"; then
   doco docker context update "$NAME" --docker "host=ssh://root@$IP" >/dev/null
 else
-  log-status info "Creating Docker context $NAME -> ssh://root@$IP"
   doco docker context create "$NAME" --docker "host=ssh://root@$IP" >/dev/null
 fi
 
 if [[ -z "$DRY_RUN" ]]; then
   VERSION="$(pct exec "$DOCO_CD_ID" -- docker --context "$NAME" version --format '{{.Server.Version}}')"
-  log-status complete "doco-cd reaches Docker $VERSION in $NAME via context '$NAME'"
+  log-status complete "Docker context $NAME -> ssh://root@$IP (Docker $VERSION)"
 fi

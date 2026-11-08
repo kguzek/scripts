@@ -8,9 +8,7 @@ source "${0:A:h}/.lxc-defaults"
 print_help() {
   cat <<EOF
 Usage: $PROGRAM_NAME [OPTION]... NAME ID
-Create an app container as a full clone of template $TEMPLATE_ID, with the address
-$SUBNET_PREFIX.ID/$SUBNET_MASK, the shared tools mounted read-only at $TOOLS_TARGET, and a
-doco-cd Docker context named NAME.
+Clone template $TEMPLATE_ID into container ID with the address $SUBNET_PREFIX.ID.
 
 Options:
   -m, --memory=MB
@@ -18,29 +16,24 @@ Options:
   -c, --cores=N
         CPU cores; default 2
   -s, --disk=GB
-        grow the root disk to this size; default is the template's size
-  -v, --volume=POOL:PATH
-        create a dataset and mount it at PATH (see lxc-volume); can be repeated
+        grow the root disk to this size
+  -v, --volume=POOL:PATH[:GB][:nobackup]
+        add a data volume (see lxc-volume); can be repeated
   -N, --no-context
-        do not register a doco-cd Docker context (e.g. for the doco-cd container itself)
+        skip creating the doco-cd Docker context
   -n, --no-start
-        do not start the container (implies --no-context)
+        do not start the container; implies --no-context
   -d, --dry-run
-        print the commands that would change anything instead of running them
+        print commands instead of running them
   -h, --help
         display help message and exit
 EOF
 }
 
-print_hint() {
-  echo "Try '$PROGRAM_NAME --help' for more information." >&2
-}
-
 wait_for_ssh() {
-  local ip="$1"
   local tries=60
   while (( tries-- )); do
-    timeout 1 bash -c "</dev/tcp/$ip/22" 2>/dev/null && return 0
+    timeout 1 bash -c "</dev/tcp/$1/22" 2>/dev/null && return 0
     sleep 1
   done
   return 1
@@ -63,12 +56,13 @@ fi
 
 if (( $# != 2 )); then
   log-status failed "$PROGRAM_NAME: expected NAME and ID"
-  print_hint
+  echo "Try '$PROGRAM_NAME --help' for more information." >&2
   exit 2
 fi
 
 NAME="$1"
 ID="$2"
+IP="$SUBNET_PREFIX.$ID"
 MEMORY="${${ARG_MEMORY[-1]:-1024}#=}"
 CORES="${${ARG_CORES[-1]:-2}#=}"
 DISK="${${ARG_DISK[-1]}#=}"
@@ -79,16 +73,16 @@ for (( i = 2; i <= $#ARG_VOLUMES; i += 2 )); do
 done
 
 if [[ ! "$NAME" =~ '^[a-z][a-z0-9-]{0,62}$' ]]; then
-  log-status failed "$PROGRAM_NAME: '$NAME': invalid name (lowercase letters, digits and hyphens)"
+  log-status failed "$PROGRAM_NAME: '$NAME': invalid name"
   exit 2
 fi
 if [[ "$ID" != <-> ]] || (( ID < 100 || ID > 254 )); then
-  log-status failed "$PROGRAM_NAME: '$ID': ID must be between 100 and 254, as it is also the last octet of the IP"
+  log-status failed "$PROGRAM_NAME: '$ID': ID must be between 100 and 254"
   exit 2
 fi
 for value in "$MEMORY" "$CORES" ${DISK:+"$DISK"}; do
   if [[ "$value" != <-> ]]; then
-    log-status failed "$PROGRAM_NAME: '$value': expected a whole number"
+    log-status failed "$PROGRAM_NAME: '$value': expected a number"
     exit 2
   fi
 done
@@ -99,14 +93,12 @@ for volume in $VOLUMES; do
   fi
 done
 
-IP="$SUBNET_PREFIX.$ID"
-
 if pct config "$ID" >/dev/null 2>&1; then
-  log-status failed "$PROGRAM_NAME: container $ID already exists ($(lxc_name_of "$ID"))"
+  log-status failed "$PROGRAM_NAME: container $ID already exists"
   exit 1
 fi
 if [[ -n "$(lxc_id_of "$NAME")" ]]; then
-  log-status failed "$PROGRAM_NAME: a container named '$NAME' already exists ($(lxc_id_of "$NAME"))"
+  log-status failed "$PROGRAM_NAME: container '$NAME' already exists"
   exit 1
 fi
 if ! pct config "$TEMPLATE_ID" 2>/dev/null | grep -q '^template: 1'; then
@@ -114,14 +106,12 @@ if ! pct config "$TEMPLATE_ID" 2>/dev/null | grep -q '^template: 1'; then
   exit 1
 fi
 if ping -c 1 -W 1 "$IP" >/dev/null 2>&1; then
-  log-status failed "$PROGRAM_NAME: $IP is already in use on the network"
+  log-status failed "$PROGRAM_NAME: $IP is already in use"
   exit 1
 fi
 
-log-status info "Cloning template $TEMPLATE_ID into $ID ($NAME)"
+log-status info "Cloning template $TEMPLATE_ID into $NAME ($ID)"
 run pct clone "$TEMPLATE_ID" "$ID" --hostname "$NAME" --full
-
-log-status info "Configuring $IP/$SUBNET_MASK, $CORES cores, ${MEMORY} MB memory"
 run pct set "$ID" \
   --net0 "name=eth0,bridge=$BRIDGE,ip=$IP/$SUBNET_MASK,gw=$GATEWAY,firewall=1" \
   --mp0 "$TOOLS_SOURCE,mp=$TOOLS_TARGET,ro=1" \
@@ -130,32 +120,28 @@ run pct set "$ID" \
   --onboot 1
 
 if [[ -n "$DISK" ]]; then
-  log-status info "Growing root disk to ${DISK}G"
   run pct resize "$ID" rootfs "${DISK}G"
 fi
 
 for volume in $VOLUMES; do
-  DRY_RUN_NAME="$NAME" "${0:A:h}/lxc-volume" ${DRY_RUN:+--dry-run} "$ID" "$volume"
+  run "${0:A:h}/lxc-volume" "$ID" "$volume"
 done
 
 if [[ -n "$FLAG_NO_START" ]]; then
-  log-status complete "Created $NAME ($ID) without starting it"
+  log-status complete "Created $NAME ($ID)"
   exit 0
 fi
 
 log-status info "Starting $NAME"
 run pct start "$ID"
 
-if [[ -z "$DRY_RUN" ]]; then
-  log-status info "Waiting for SSH on $IP"
-  if ! wait_for_ssh "$IP"; then
-    log-status failed "$PROGRAM_NAME: SSH on $IP did not come up within 60 seconds"
-    exit 1
-  fi
+if [[ -z "$DRY_RUN" ]] && ! wait_for_ssh "$IP"; then
+  log-status failed "$PROGRAM_NAME: no SSH on $IP after 60 seconds"
+  exit 1
 fi
 
 if [[ -z "$FLAG_NO_CONTEXT" ]]; then
-  DRY_RUN_NAME="$NAME" "${0:A:h}/lxc-context" ${DRY_RUN:+--dry-run} "$ID"
+  run "${0:A:h}/lxc-context" "$ID"
 fi
 
-log-status complete "Container $NAME ($ID) is ready at $IP"
+log-status complete "Created $NAME ($ID) at $IP"

@@ -6,36 +6,25 @@ PROGRAM_NAME="${0:t}"
 source "${0:A:h}/.lxc-defaults"
 
 print_help() {
-  local -a datasets=(${^${(v)VOLUME_PARENTS}}/NAME)
   cat <<EOF
 Usage: $PROGRAM_NAME [OPTION]... CONTAINER
 where CONTAINER := { NAME | ID }
-
-Stop and destroy an app container and remove its doco-cd Docker context.
-Its datasets (${(j:, :)datasets}) are kept unless --purge-data is given.
+Back up a container to $BACKUP_STORAGE, then destroy it and its volumes.
 
 Options:
-  -p, --purge-data
-        also destroy the container's datasets, including all their snapshots
+  -B, --no-backup
+        skip the backup
   -y, --yes
         do not ask for confirmation
   -d, --dry-run
-        print the commands that would change anything instead of running them
+        print commands instead of running them
   -h, --help
         display help message and exit
 EOF
 }
 
-confirm() {
-  local expected="$1"
-  local prompt="$2"
-  [[ -n "$FLAG_YES" || -n "$DRY_RUN" ]] && return 0
-  local reply="$(log-status input "$prompt Type '$expected' to confirm: ")"
-  [[ "$reply" == "$expected" ]]
-}
-
 zparseopts -D -E -- \
-  {p,-purge-data}=FLAG_PURGE \
+  {B,-no-backup}=FLAG_NO_BACKUP \
   {y,-yes}=FLAG_YES \
   {d,-dry-run}=FLAG_DRY_RUN \
   {h,-help}=FLAG_HELP
@@ -61,57 +50,39 @@ fi
 NAME="$(lxc_name_of "$ID")"
 
 if [[ "$ID" == "$TEMPLATE_ID" || "$ID" == "$DOCO_CD_ID" ]]; then
-  log-status failed "$PROGRAM_NAME: refusing to destroy $NAME ($ID); remove it with pct directly if you really mean it"
+  log-status failed "$PROGRAM_NAME: refusing to remove $NAME ($ID)"
+  exit 1
+fi
+if [[ -z "$FLAG_NO_BACKUP" ]] && ! pvesm status --storage "$BACKUP_STORAGE" >/dev/null 2>&1; then
+  log-status failed "$PROGRAM_NAME: $BACKUP_STORAGE is not available"
   exit 1
 fi
 
-DATASETS=()
-for parent in ${(v)VOLUME_PARENTS}; do
-  if zfs list -H -o name "$parent/$NAME" >/dev/null 2>&1; then
-    DATASETS+=("$parent/$NAME")
-  fi
-done
+log-status info "Volumes of $NAME ($ID):"
+pct config "$ID" | grep -E '^(rootfs|mp[0-9]+): [^/]' | sed 's/^/    /'
 
-if ! confirm "$NAME" "Destroy container $NAME ($ID)?"; then
-  log-status failed "Aborted"
-  exit 1
+if [[ -z "$FLAG_YES" && -z "$DRY_RUN" ]]; then
+  REPLY="$(log-status input "Type '$NAME' to destroy it: ")"
+  if [[ "$REPLY" != "$NAME" ]]; then
+    log-status failed "Aborted"
+    exit 1
+  fi
+fi
+
+if [[ -z "$FLAG_NO_BACKUP" ]]; then
+  log-status info "Backing up $NAME"
+  run vzdump "$ID" --storage "$BACKUP_STORAGE" --mode snapshot --notes-template "{{guestname}} before removal"
 fi
 
 if pct status "$DOCO_CD_ID" 2>/dev/null | grep -q running; then
   "${0:A:h}/lxc-context" ${DRY_RUN:+--dry-run} --remove "$NAME"
 else
-  log-status warn "doco-cd container $DOCO_CD_ID is not running; remove the '$NAME' context later with: lxc-context --remove $NAME"
+  log-status warn "doco-cd is not running; run 'lxc-context --remove $NAME' later"
 fi
 
 if pct status "$ID" | grep -q running; then
-  log-status info "Stopping $NAME"
   run pct stop "$ID"
 fi
-
-log-status info "Destroying container $ID"
 run pct destroy "$ID" --purge
 
-if (( $#DATASETS == 0 )); then
-  log-status complete "Destroyed $NAME ($ID); it had no datasets"
-  exit 0
-fi
-
-if [[ -z "$FLAG_PURGE" ]]; then
-  log-status complete "Destroyed $NAME ($ID); kept datasets: ${(j:, :)DATASETS}"
-  exit 0
-fi
-
-for dataset in $DATASETS; do
-  zfs list -H -r -o name,used "$dataset" | sed 's/^/    /'
-done
-if ! confirm "purge $NAME" "Permanently destroy the datasets above and their snapshots?"; then
-  log-status warn "Kept datasets: ${(j:, :)DATASETS}"
-  exit 0
-fi
-
-for dataset in $DATASETS; do
-  log-status info "Destroying dataset $dataset"
-  run zfs destroy -r "$dataset"
-done
-
-log-status complete "Destroyed $NAME ($ID) and its data"
+log-status complete "Removed $NAME ($ID)"

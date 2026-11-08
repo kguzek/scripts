@@ -1,5 +1,3 @@
-# Shared settings and helpers for the LXC scripts in this directory (sourced, not executed)
-
 TEMPLATE_ID=9000
 DOCO_CD_ID=110
 
@@ -11,14 +9,12 @@ GATEWAY=192.168.0.1
 TOOLS_SOURCE=/rpool/tools
 TOOLS_TARGET=/opt/tools
 
-# root inside an unprivileged container maps to this host uid/gid
-CT_ROOT_UID=100000
-
-# POOL in `--volume POOL:PATH` -> parent dataset; each must already exist (and carry encryption, if any)
-declare -A VOLUME_PARENTS=(
-  dpool dpool/data
-  rpool rpool/appdata
+declare -A VOLUME_STORAGES=(
+  dpool dpool
+  rpool local-zfs
 )
+DEFAULT_VOLUME_GB=10
+BACKUP_STORAGE=pbs-box
 
 run() {
   if [[ -n "$DRY_RUN" ]]; then
@@ -40,14 +36,11 @@ lxc_ip_of() {
   pct config "$1" 2>/dev/null | sed -n 's|^net0:.*[:,]ip=\([0-9.]*\)/.*|\1|p'
 }
 
-# accepts a container name or ID, prints the ID (nothing if there is no such container)
 resolve_lxc() {
-  if [[ "$1" == <-> ]]; then
-    if pct config "$1" >/dev/null 2>&1; then
-      print -r -- "$1"
-    fi
-  else
+  if [[ "$1" != <-> ]]; then
     lxc_id_of "$1"
+  elif pct config "$1" >/dev/null 2>&1; then
+    print -r -- "$1"
   fi
   return 0
 }
