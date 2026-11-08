@@ -4,7 +4,7 @@ set -euo pipefail
 VG=fedora
 SNAPSHOT_SUFFIX=pbs-snapshot
 SNAPSHOT_ROOT=/run/backup-pbs
-declare -A SNAPSHOT_SIZES=([root]=10G [data]=20G)
+declare -A SNAPSHOT_SIZES=([root]=10G [data]=60G)
 
 cleanup() {
   for lv in "${!SNAPSHOT_SIZES[@]}"; do
