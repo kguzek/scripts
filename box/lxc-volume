@@ -1,0 +1,110 @@
+#!/usr/bin/env zsh
+
+set -e
+
+PROGRAM_NAME="${0:t}"
+source "${0:A:h}/.lxc-defaults"
+
+print_help() {
+  cat <<EOF
+Usage: $PROGRAM_NAME [OPTION]... CONTAINER POOL:PATH
+where CONTAINER := { NAME | ID }
+      POOL := { ${(j: | :)${(ok)VOLUME_PARENTS}} }
+
+Create a ZFS dataset for a container and bind-mount it at PATH inside the container.
+The dataset is named after the container and PATH:
+  dpool:/data/NAME             -> dpool/data/NAME
+  rpool:/data/NAME/postgresql  -> rpool/appdata/NAME/postgresql
+  dpool:/srv/media             -> dpool/data/NAME/media
+A new dataset is owned by the container's root user. Existing datasets are reused as-is.
+
+Options:
+  -d, --dry-run
+        print the commands that would change anything instead of running them
+  -h, --help
+        display help message and exit
+EOF
+}
+
+zparseopts -D -E -- \
+  {d,-dry-run}=FLAG_DRY_RUN \
+  {h,-help}=FLAG_HELP
+
+if [[ -n "$FLAG_HELP" ]]; then
+  print_help
+  exit 0
+fi
+
+if (( $# != 2 )) || [[ "$2" != *:/* ]]; then
+  log-status failed "$PROGRAM_NAME: expected CONTAINER and POOL:PATH"
+  echo "Try '$PROGRAM_NAME --help' for more information." >&2
+  exit 2
+fi
+
+DRY_RUN="${FLAG_DRY_RUN:+1}"
+POOL="${2%%:*}"
+TARGET="${2#*:}"
+TARGET="${TARGET%/}"
+
+ID="$(resolve_lxc "$1")"
+if [[ -z "$ID" ]]; then
+  # under --dry-run, lxc-new passes the ID of a container that does not exist yet
+  if [[ -n "$DRY_RUN" && "$1" == <-> ]]; then
+    ID="$1"
+  else
+    log-status failed "$PROGRAM_NAME: '$1': no such container"
+    exit 1
+  fi
+fi
+NAME="$(lxc_name_of "$ID")"
+# under --dry-run, lxc-new passes the name of the container it would have created
+NAME="${NAME:-${DRY_RUN_NAME:-ct$ID}}"
+
+PARENT="${VOLUME_PARENTS[$POOL]}"
+if [[ -z "$PARENT" ]]; then
+  log-status failed "$PROGRAM_NAME: '$POOL': unknown pool, expected one of: ${(ok)VOLUME_PARENTS}"
+  exit 2
+fi
+# refuse to create the parent implicitly, so it cannot end up unencrypted by accident
+if ! zfs list -H -o name "$PARENT" >/dev/null 2>&1; then
+  log-status failed "$PROGRAM_NAME: parent dataset '$PARENT' does not exist; create it first (with encryption, if wanted)"
+  exit 1
+fi
+
+if [[ "$TARGET" == "/data/$NAME" ]]; then
+  DATASET="$PARENT/$NAME"
+elif [[ "$TARGET" == /data/$NAME/* ]]; then
+  DATASET="$PARENT/$NAME/${TARGET#/data/$NAME/}"
+else
+  DATASET="$PARENT/$NAME/${TARGET:t}"
+fi
+
+CONFIG="$(pct config "$ID" 2>/dev/null || true)"
+if grep -q "^mp[0-9]*: .*mp=$TARGET\(,\|$\)" <<<"$CONFIG"; then
+  log-status unchanged "$TARGET is already mounted in $NAME ($ID)"
+  exit 0
+fi
+
+# first free mount point index; mp0 is reserved for the shared tools
+MP_INDEX=1
+while grep -q "^mp$MP_INDEX:" <<<"$CONFIG"; do
+  (( MP_INDEX++ ))
+done
+
+if zfs list -H -o name "$DATASET" >/dev/null 2>&1; then
+  log-status unchanged "Reusing existing dataset $DATASET"
+else
+  log-status info "Creating dataset $DATASET"
+  run zfs create -p "$DATASET"
+  run chown "$CT_ROOT_UID:$CT_ROOT_UID" "/$DATASET"
+fi
+
+MOUNTPOINT="$(zfs get -H -o value mountpoint "$DATASET" 2>/dev/null || print -r -- "/$DATASET")"
+log-status info "Mounting $MOUNTPOINT at $TARGET in $NAME ($ID) as mp$MP_INDEX"
+run pct set "$ID" "--mp$MP_INDEX" "$MOUNTPOINT,mp=$TARGET"
+
+if pct status "$ID" 2>/dev/null | grep -q running; then
+  log-status warn "$NAME is running; restart it if $TARGET does not appear (pct reboot $ID)"
+fi
+
+log-status complete "Mounted $DATASET at $TARGET"
