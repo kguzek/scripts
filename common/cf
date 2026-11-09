@@ -463,12 +463,14 @@ find_dns_record_for_hostname() {
     | [.result[]?
         | select((.name | ascii_downcase) == $host)
         | select(($type == "") or (.type == $type))]
+    | length as $count
     | first // empty
-    | [.id, .type, .content, (.proxied | tostring)]
+    | [.id, .type, .content, (.proxied | tostring), $count]
     | @tsv
   ' <<< "$response")"
 
   if [[ -z "$match" ]]; then
+    found_dns_record_count=0
     found_dns_record_id=''
     found_dns_record_type=''
     found_dns_record_content=''
@@ -481,7 +483,9 @@ find_dns_record_for_hostname() {
   found_dns_record_type="${match%%$'\t'*}"
   match="${match#*$'\t'}"
   found_dns_record_content="${match%%$'\t'*}"
-  found_dns_record_proxied="${match#*$'\t'}"
+  match="${match#*$'\t'}"
+  found_dns_record_proxied="${match%%$'\t'*}"
+  found_dns_record_count="${match#*$'\t'}"
 }
 
 fetch_dns_records() {
@@ -884,7 +888,10 @@ edit_dns_record() {
     find_dns_record_for_hostname "$hostname" "$type"
 
     if [[ -z "$found_dns_record_id" ]]; then
-      fail "No DNS $type record for $hostname in $found_zone_name"
+      # Changing the type: allowed when the hostname has exactly one record
+      find_dns_record_for_hostname "$hostname"
+      [[ -n "$found_dns_record_id" ]] || fail "No DNS record for $hostname in $found_zone_name"
+      [[ "$found_dns_record_count" == 1 ]] || fail "No DNS $type record for $hostname in $found_zone_name, and it has multiple records of other types"
     fi
   fi
 
@@ -1485,8 +1492,10 @@ case "${1:-}" in
               exit 2
             fi
             if [[ "$parsed_dns_args[1]" == <-> && "$parsed_dns_args[1]" -gt 0 ]]; then
+              # The cached number already identifies the record, so update it by ID (this also allows type changes)
               resolve_cached_zone_dns_number "$found_zone_id" "$parsed_dns_args[1]"
-              edit_dns_record "$cached_dns_record_name" "$parsed_dns_type" "$parsed_dns_args[2]"
+              update_dns_record "$cached_dns_record_name" "$parsed_dns_type" "$parsed_dns_args[2]"
+              refresh_dns_cache_if_fresh
             else
               edit_dns_record "$parsed_dns_args[1]" "$parsed_dns_type" "$parsed_dns_args[2]"
             fi
