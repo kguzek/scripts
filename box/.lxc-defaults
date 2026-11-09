@@ -9,6 +9,9 @@ GATEWAY=192.168.0.1
 TOOLS_SOURCE=/rpool/tools
 TOOLS_TARGET=/opt/tools
 
+SERVICES_SOURCE=/rpool/services
+SERVICES_TARGET=/srv/services
+
 declare -A VOLUME_STORAGES=(
   dpool dpool
   rpool local-zfs

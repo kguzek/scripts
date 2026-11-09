@@ -1,0 +1,14 @@
+#!/bin/sh
+# Pull the services repo clone that lxc-new mounts read-only into every app container.
+#
+# Set up once:
+#   zfs create rpool/services
+#   git clone --single-branch --branch main https://git.guzek.uk/kguzek/services.git /rpool/services
+#   git -C /rpool/services config credential.helper 'store --file=/root/.config/git/services-credentials'
+#   git -C /rpool/services pull    # enter the username and a read-only token once
+#   install -m755 services-sync /usr/local/bin/services-sync
+#   install -m644 services-sync.service services-sync.timer /etc/systemd/system/
+#   systemctl enable --now services-sync.timer
+set -eu
+
+git -C /rpool/services pull --ff-only --quiet

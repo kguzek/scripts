@@ -105,6 +105,10 @@ if ! pct config "$TEMPLATE_ID" 2>/dev/null | grep -q '^template: 1'; then
   log-status failed "$PROGRAM_NAME: template $TEMPLATE_ID not found"
   exit 1
 fi
+if [[ ! -d "$SERVICES_SOURCE/.git" ]]; then
+  log-status failed "$PROGRAM_NAME: $SERVICES_SOURCE is not a git clone; see services-sync"
+  exit 1
+fi
 if ping -c 1 -W 1 "$IP" >/dev/null 2>&1; then
   log-status failed "$PROGRAM_NAME: $IP is already in use"
   exit 1
@@ -115,6 +119,7 @@ run pct clone "$TEMPLATE_ID" "$ID" --hostname "$NAME" --full
 run pct set "$ID" \
   --net0 "name=eth0,bridge=$BRIDGE,ip=$IP/$SUBNET_MASK,gw=$GATEWAY,firewall=1" \
   --mp0 "$TOOLS_SOURCE,mp=$TOOLS_TARGET,ro=1" \
+  --mp1 "$SERVICES_SOURCE,mp=$SERVICES_TARGET,ro=1" \
   --cores "$CORES" \
   --memory "$MEMORY" \
   --onboot 1
