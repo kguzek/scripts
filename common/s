@@ -1,14 +1,16 @@
 #!/usr/bin/env zsh
 
 set -e
+LAN_SUBNET="192.168.0"
+VPN_SUBNET="10.1.7"
 PING_TIMEOUT_SECONDS=0.1
 PROGRAM_NAME="${0:t}"
 AVAILABLE_TARGETS=($(wk -l))
 
 print_usage() {
   cat <<EOF
-Usage: $PROGRAM_NAME [OPTION]... TARGET [SSH_OPTION]...
-where TARGET := { ${(j: | :)AVAILABLE_TARGETS} }
+Usage: $PROGRAM_NAME [OPTION]... [USER@]TARGET [SSH_OPTION]...
+where TARGET := { ${(j: | :)AVAILABLE_TARGETS} | IP_SUFFIX }
 
 Options:
   --help, -h
@@ -37,6 +39,9 @@ SSH_ARGUMENTS=("$@")
 
 if [ "$TARGET" = "$TARGET_HOSTNAME" ]; then
   TARGET_USER=""
+  if [[ "$TARGET_HOSTNAME" == <-> ]] && (( 10#$TARGET_HOSTNAME >= 100 && 10#$TARGET_HOSTNAME < 200 )); then
+    TARGET_USER="root@"
+  fi
 else
   TARGET_USER="${TARGET%@*}@"
 fi
@@ -56,11 +61,19 @@ succeed() {
 }
 
 iterate_routes() {
-  local -a ROUTES=(
-    "$TARGET_HOSTNAME.lan.guzek.uk" "LAN"
-    "$TARGET_HOSTNAME.vpn.guzek.uk" "VPN"
-    "ssh-$TARGET_HOSTNAME.guzek.uk" "Cloudflare tunnel"
-  )
+  local -a ROUTES
+  if [[ "$TARGET_HOSTNAME" == <-> ]]; then
+    ROUTES=(
+      "$LAN_SUBNET.$TARGET_HOSTNAME" "LAN"
+      "$VPN_SUBNET.$TARGET_HOSTNAME" "VPN"
+    )
+  else
+    ROUTES=(
+      "$TARGET_HOSTNAME.lan.guzek.uk" "LAN"
+      "$TARGET_HOSTNAME.vpn.guzek.uk" "VPN"
+      "ssh-$TARGET_HOSTNAME.guzek.uk" "Cloudflare tunnel"
+    )
+  fi
 
   for host label in ${(kv)ROUTES}; do
     if test_connection "$host" "$label"; then
