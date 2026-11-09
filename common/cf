@@ -45,8 +45,9 @@ Commands:
   dns [DOMAIN] delete|remove RECORD [--type TYPE --content CONTENT]
         Delete a DNS record by name or number; selectors must match exactly one record
   dns [DOMAIN] get QUERY [--type|-t TYPE ...] [-x TYPE ...]
-        Print values of DNS records whose name contains QUERY (case-insensitive),
-        one per line; --type keeps only these types, -x excludes types
+        Search DNS record names for QUERY (case-insensitive); an exact name match
+        prints only its values, otherwise each partial match prints as 'NAME -> VALUE';
+        --type keeps only these types, -x excludes types
 
 Options:
   --help, -h
@@ -977,15 +978,24 @@ get_dns_record_values() {
 
   [[ -n "$query" ]] || fail "Missing search query for DNS get"
 
-  # The query only matches record names, never record content
+  # The query only matches record names, never record content.
+  # An exact name match prints bare values; otherwise every partial match prints as "name -> value".
   matches="$(jq -r --arg query "$query" \
     --argjson types "$(jq -nc '$ARGS.positional' --args -- "${types[@]}")" \
     --argjson excludes "$(jq -nc '$ARGS.positional' --args -- "${excludes[@]}")" '
-    .[]
-    | select(.name | ascii_downcase | contains($query | ascii_downcase))
-    | select(($types | length) == 0 or (.type as $type | $types | index($type)))
-    | select(.type as $type | $excludes | index($type) | not)
-    | .content
+    ($query | ascii_downcase) as $query
+    | [
+        .[]
+        | select(.name | ascii_downcase | contains($query))
+        | select(($types | length) == 0 or (.type as $type | $types | index($type)))
+        | select(.type as $type | $excludes | index($type) | not)
+      ]
+    | [.[] | select((.name | ascii_downcase) == $query)] as $exact
+    | if ($exact | length) > 0 then
+        $exact[] | .content
+      else
+        .[] | .name + " -> " + .content
+      end
   ' <<< "$records")"
 
   [[ -n "$matches" ]] || fail "No DNS record name matches '$query'"
