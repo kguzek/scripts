@@ -1,0 +1,10 @@
+[Unit]
+Description=Back up Proxmox host configuration nightly, after the 02:00 guest backup
+
+[Timer]
+OnCalendar=*-*-* 02:30
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

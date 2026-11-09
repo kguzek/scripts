@@ -1,0 +1,52 @@
+#!/bin/bash
+# Back up the Proxmox host configuration, plus host data that guest backups
+# skip (bind-mounted datasets), to PBS as backup group host/<hostname>.
+# Reuses the credentials and encryption key of the pbs-box storage.
+#
+# Set up once (the service runs this script from the repo clone in
+# /rpool/tools/config/scripts, so a git pull updates it):
+#   install -m644 pve-host-backup.service pve-host-backup.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now pve-host-backup.timer
+#
+# Restore: PBS web UI → Datastore → backup → Content → host/<hostname>,
+# or proxmox-backup-client restore host/<hostname>/<time> <archive> <target>
+set -euo pipefail
+
+STORAGE=pbs-box
+CFG=/etc/pve/storage.cfg
+
+# Read repository settings from the pbs-box section of storage.cfg
+get() { awk -v s="$STORAGE" -v k="$1" '
+  /^[a-z]+: /{f=($2==s)} f && $1==k {print $2; exit}' "$CFG"; }
+server=$(get server); datastore=$(get datastore); username=$(get username)
+export PBS_REPOSITORY="${username}@${server}:${datastore}"
+export PBS_FINGERPRINT=$(get fingerprint)
+export PBS_PASSWORD_FILE=/etc/pve/priv/storage/${STORAGE}.pw
+KEYFILE=/etc/pve/priv/storage/${STORAGE}.enc
+
+# Consistent copy of the pmxcfs database (backs /etc/pve)
+STAGE=$(mktemp -d /run/pve-host-backup.XXXXXX)
+trap 'rm -rf "$STAGE"' EXIT
+if command -v sqlite3 >/dev/null; then
+  sqlite3 /var/lib/pve-cluster/config.db ".backup '$STAGE/config.db'"
+else
+  cp -a /var/lib/pve-cluster/config.db "$STAGE/config.db"
+fi
+
+archives=(
+  "etc.pxar:/etc"
+  "pve-cluster.pxar:$STAGE"
+  "root.pxar:/root"
+  "usr-local.pxar:/usr/local"
+)
+# Host datasets bind-mounted into containers (vzdump skips bind mounts)
+for d in /rpool/tools /rpool/services; do
+  [ -d "$d" ] && archives+=("rpool-$(basename "$d").pxar:$d")
+done
+[ -d /var/spool/cron/crontabs ] && archives+=("crontabs.pxar:/var/spool/cron/crontabs")
+
+proxmox-backup-client backup "${archives[@]}" \
+  --keyfile "$KEYFILE" --crypt-mode encrypt \
+  --backup-type host --backup-id "$(hostname -s)" \
+  --change-detection-mode metadata

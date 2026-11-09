@@ -1,0 +1,10 @@
+[Unit]
+Description=Back up Proxmox host configuration to PBS
+Requires=pve-cluster.service
+After=pve-cluster.service proxmox-backup-proxy.service
+
+[Service]
+Type=oneshot
+ExecStart=/rpool/tools/config/scripts/box/pve-host-backup
+Nice=10
+IOSchedulingClass=idle
