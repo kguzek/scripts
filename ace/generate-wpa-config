@@ -69,7 +69,7 @@ if ! NETWORK_PSK="$(nmcli --escape no --show-secrets --get-values 802-11-wireles
   exit 1
 fi
 
-if ! NETWORK_CONFIG="$(print -r -- "$NETWORK_PSK" | wpa_passphrase "$NETWORK_SSID")"; then
+if ! NETWORK_CONFIG="$(print -r -- "$NETWORK_PSK" | wpa_passphrase "$NETWORK_SSID" 2> >(sed '/^# reading passphrase from stdin$/d' >&2))"; then
   log-status failed "$PROGRAM_NAME: failed to generate WPA configuration for '$NETWORK_NAME'"
   exit 1
 fi
