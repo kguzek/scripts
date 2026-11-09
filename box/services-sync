@@ -4,6 +4,7 @@
 # Set up once:
 #   zfs create rpool/services
 #   git clone --single-branch --branch main https://git.guzek.uk/kguzek/services.git /rpool/services
+#   mkdir -p -m 700 /root/.config/git
 #   git -C /rpool/services config credential.helper 'store --file=/root/.config/git/services-credentials'
 #   git -C /rpool/services pull    # enter the username and a read-only token once
 #   install -m755 services-sync /usr/local/bin/services-sync

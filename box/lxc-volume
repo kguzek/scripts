@@ -71,7 +71,7 @@ if grep -q "^mp[0-9]*: .*mp=$TARGET\(,\|$\)" <<<"$CONFIG"; then
   exit 0
 fi
 
-MP_INDEX=1
+MP_INDEX=2
 while grep -q "^mp$MP_INDEX:" <<<"$CONFIG"; do
   (( MP_INDEX++ ))
 done
