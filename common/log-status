@@ -55,6 +55,8 @@ Usage: $PROGRAM_NAME [OPTION]... LEVEL MESSAGE...
 where LEVEL := { ${(j: | :)levels} }
 
 Options:
+  -p, --private
+        hide typed input for the input level
   -c, --color=COLOR_MODE
         control when to use colored output; default is 'auto', which uses colors if stdout is a TTY
         where COLOR_MODE := { never | always | auto }
@@ -68,6 +70,7 @@ EOF
 zparseopts -D -- \
   {h,-help}=FLAG_HELP \
   {l,-list-levels}=FLAG_LIST \
+  {p,-private}=FLAG_PRIVATE \
   {c,-color}:=ARG_COLOR
 
 COLOR_MODE="${${ARG_COLOR[$#ARG_COLOR]:-auto}#=}"
@@ -144,6 +147,11 @@ done
 printf '%b%s%b %s%b' "$color" "$prefix" "$c_reset" "$message" "$newline" >&$output_stream
 
 if [[ "$level" == input ]]; then
-  read -r REPLY
+  if [[ -n "$FLAG_PRIVATE" ]]; then
+    IFS= read -r -s REPLY || { printf '\n' >&2; exit 1; }
+    printf '\n' >&2
+  else
+    read -r REPLY
+  fi
   printf '%s\n' "$REPLY"
 fi

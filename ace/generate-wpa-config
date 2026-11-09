@@ -65,8 +65,10 @@ if ! NETWORK_SSID="$(nmcli --escape no --get-values 802-11-wireless.ssid connect
 fi
 
 if ! NETWORK_PSK="$(nmcli --escape no --show-secrets --get-values 802-11-wireless-security.psk connection show "$NETWORK_NAME")" || [[ -z "$NETWORK_PSK" ]]; then
-  log-status failed "$PROGRAM_NAME: failed to read PSK for '$NETWORK_NAME'"
-  exit 1
+  if ! NETWORK_PSK="$(log-status --private input "Wi-Fi passphrase for $NETWORK_SSID: ")"; then
+    log-status failed "$PROGRAM_NAME: failed to read passphrase"
+    exit 1
+  fi
 fi
 
 if ! NETWORK_CONFIG="$(print -r -- "$NETWORK_PSK" | wpa_passphrase "$NETWORK_SSID" 2> >(sed '/^# reading passphrase from stdin$/d' >&2))"; then
