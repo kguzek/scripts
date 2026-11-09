@@ -44,6 +44,9 @@ Commands:
         Edit a DNS record by name or number
   dns [DOMAIN] delete|remove RECORD [--type TYPE --content CONTENT]
         Delete a DNS record by name or number; selectors must match exactly one record
+  dns [DOMAIN] get QUERY [--type|-t TYPE ...] [-x TYPE ...]
+        Print values of DNS records whose name contains QUERY (case-insensitive),
+        one per line; --type keeps only these types, -x excludes types
 
 Options:
   --help, -h
@@ -73,6 +76,9 @@ Examples:
   $PROGRAM_NAME dns edit a.example.com 192.168.0.2
   $PROGRAM_NAME dns edit 2 --type a 192.168.0.3
   $PROGRAM_NAME dns remove b.example.com
+  $PROGRAM_NAME dns get a.example
+  $PROGRAM_NAME dns guzek.uk get test --type a
+  $PROGRAM_NAME dns 1 get _acme -t txt
   $PROGRAM_NAME dns guzek.uk
   $PROGRAM_NAME dns 1
   $PROGRAM_NAME dns guzek.uk add test.guzek.uk 192.168.0.1
@@ -934,6 +940,58 @@ delete_any_dns_record() {
   refresh_dns_cache_if_fresh
 }
 
+get_dns_record_values() {
+  local records="$1"
+  shift
+  local query='' types=() excludes=("${dns_exclude_types[@]}") matches
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -t|--type|-x|--exclude)
+        [[ $# -ge 2 ]] || fail "Missing type after $1"
+        if [[ "$1" == -t || "$1" == --type ]]; then
+          types+=("$(normalize_dns_type "$2")")
+        else
+          excludes+=("$(normalize_dns_type "$2")")
+        fi
+        shift 2
+        ;;
+      --type=*)
+        types+=("$(normalize_dns_type "${1#--type=}")")
+        shift
+        ;;
+      --exclude=*)
+        excludes+=("$(normalize_dns_type "${1#--exclude=}")")
+        shift
+        ;;
+      -*)
+        fail "Unknown DNS get option: $1"
+        ;;
+      *)
+        [[ -z "$query" ]] || fail "Only one search query is allowed"
+        query="$1"
+        shift
+        ;;
+    esac
+  done
+
+  [[ -n "$query" ]] || fail "Missing search query for DNS get"
+
+  # The query only matches record names, never record content
+  matches="$(jq -r --arg query "$query" \
+    --argjson types "$(jq -nc '$ARGS.positional' --args -- "${types[@]}")" \
+    --argjson excludes "$(jq -nc '$ARGS.positional' --args -- "${excludes[@]}")" '
+    .[]
+    | select(.name | ascii_downcase | contains($query | ascii_downcase))
+    | select(($types | length) == 0 or (.type as $type | $types | index($type)))
+    | select(.type as $type | $excludes | index($type) | not)
+    | .content
+  ' <<< "$records")"
+
+  [[ -n "$matches" ]] || fail "No DNS record name matches '$query'"
+  print -r -- "$matches"
+}
+
 parse_dns_record_args() {
   local type="A"
   local option
@@ -1318,7 +1376,7 @@ case "${1:-}" in
 
     shift
     case "${1:-}" in
-      add|edit|delete|remove|-x|--exclude|'')
+      add|edit|delete|remove|get|-x|--exclude|'')
         # No domain scope
         dns_exclude_types=()
         while [[ $# -gt 0 ]]; do
@@ -1362,6 +1420,12 @@ case "${1:-}" in
               exit 2
             fi
             delete_any_dns_record "$@"
+            ;;
+          get)
+            shift
+            fetch_dns_records
+            write_dns_cache "$fetched_dns_records"
+            get_dns_record_values "$fetched_dns_records" "$@"
             ;;
           *)
             list_dns_records
@@ -1433,6 +1497,12 @@ case "${1:-}" in
               delete_any_dns_record "$@"
             fi
             refresh_zone_dns_cache_if_fresh
+            ;;
+          get)
+            shift
+            fetch_zone_dns_records "$found_zone_id" "$found_zone_name"
+            write_zone_dns_cache "$found_zone_id" "$fetched_zone_dns_records"
+            get_dns_record_values "$fetched_zone_dns_records" "$@"
             ;;
           *)
             list_zone_dns_records "$found_zone_id" "$found_zone_name"
