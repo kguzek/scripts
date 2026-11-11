@@ -1,0 +1,75 @@
+#!/usr/bin/env zsh
+
+set -e
+
+PROGRAM_NAME="${0:t}"
+source "${0:A:h}/.lxc-defaults"
+
+print_help() {
+  cat <<EOF
+Usage: $PROGRAM_NAME [OPTION]... CONTAINER
+where CONTAINER := { NAME | ID }
+Route $VPN_SUBNET via the host ($VPN_GATEWAY) so the container can reach VPN-only
+services through Caddy, and persist the route in /etc/network/interfaces.
+
+Options:
+  -d, --dry-run
+        print commands instead of running them
+  -h, --help
+        display help message and exit
+EOF
+}
+
+zparseopts -D -E -- \
+  {d,-dry-run}=FLAG_DRY_RUN \
+  {h,-help}=FLAG_HELP
+
+if [[ -n "$FLAG_HELP" ]]; then
+  print_help
+  exit 0
+fi
+
+if (( $# != 1 )); then
+  log-status failed "$PROGRAM_NAME: expected exactly one container"
+  echo "Try '$PROGRAM_NAME --help' for more information." >&2
+  exit 2
+fi
+
+DRY_RUN="${FLAG_DRY_RUN:+1}"
+
+ID="$(resolve_lxc "$1")"
+if [[ -z "$ID" ]]; then
+  log-status failed "$PROGRAM_NAME: '$1': no such container"
+  exit 1
+fi
+NAME="$(lxc_name_of "$ID")"
+
+if ! pct status "$ID" | grep -q running; then
+  log-status failed "$PROGRAM_NAME: $NAME ($ID) is not running"
+  exit 1
+fi
+
+ROUTE="$VPN_SUBNET via $VPN_GATEWAY"
+POST_UP="post-up ip route add $ROUTE"
+
+if pct exec "$ID" -- grep -qF "$POST_UP" /etc/network/interfaces; then
+  log-status unchanged "$NAME already persists the route"
+else
+  log-status info "Persisting the route in $NAME"
+  run pct exec "$ID" -- sed -i "/^iface eth0 inet static/,/^\$/ { /^\tgateway /a\\\\t$POST_UP
+}" /etc/network/interfaces
+  if [[ -z "$DRY_RUN" ]] && ! pct exec "$ID" -- grep -qF "$POST_UP" /etc/network/interfaces; then
+    log-status failed "$PROGRAM_NAME: no static eth0 gateway in $NAME's /etc/network/interfaces"
+    exit 1
+  fi
+fi
+
+run pct exec "$ID" -- ip route replace ${=ROUTE} dev eth0
+
+# With the Proxmox firewall on, packets cross a fwbr bridge first, where the host's
+# NETMAP rule (-i vmbr0) does not match, so the VPN addresses are never translated.
+if pct config "$ID" | grep -q '^net0:.*firewall=1'; then
+  log-status warn "net0 of $NAME has firewall=1; VPN addresses stay unreachable until it is 0"
+fi
+
+log-status complete "$NAME ($ID) routes $ROUTE"
