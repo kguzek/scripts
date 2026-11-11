@@ -2,7 +2,7 @@
 Description=Pull the services repo every minute
 
 [Timer]
-OnBootSec=1min
+OnBootSec=90s
 OnUnitActiveSec=1min
 
 [Install]
