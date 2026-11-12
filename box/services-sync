@@ -12,4 +12,5 @@
 #   systemctl enable --now services-sync.timer
 set -eu
 
-git -C /rpool/services pull --ff-only --quiet
+git -C /rpool/services pull --ff-only --quiet --recurse-submodules
+git -C /rpool/services submodule update --init --quiet
