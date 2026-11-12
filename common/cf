@@ -798,17 +798,22 @@ upsert_dns_record() {
   local target
 
   find_zone_for_hostname "$hostname"
-  find_dns_record_for_hostname "$hostname"
-
   target="$(tunnel_dns_target)"
+
+  # Other types (e.g. TXT on an apex) can coexist with a proxied CNAME; only address records conflict
+  local conflict_type
+  for conflict_type in A AAAA; do
+    find_dns_record_for_hostname "$hostname" "$conflict_type"
+    if [[ -n "$found_dns_record_id" ]]; then
+      fail "DNS record for $hostname already exists as $conflict_type; refusing to replace it"
+    fi
+  done
+
+  find_dns_record_for_hostname "$hostname" CNAME
 
   if [[ -z "$found_dns_record_id" ]]; then
     create_dns_record "$hostname" CNAME "$target" true
     return
-  fi
-
-  if [[ "$found_dns_record_type" != CNAME ]]; then
-    fail "DNS record for $hostname already exists as $found_dns_record_type; refusing to replace it"
   fi
 
   if [[ "$found_dns_record_content" == "$target" && "$found_dns_record_proxied" == true ]]; then
@@ -824,7 +829,7 @@ delete_dns_record() {
   local target
 
   find_zone_for_hostname "$hostname"
-  find_dns_record_for_hostname "$hostname"
+  find_dns_record_for_hostname "$hostname" CNAME
 
   if [[ -z "$found_dns_record_id" ]]; then
     log-status warn "No DNS record found for $hostname"
@@ -1333,9 +1338,14 @@ add_route() {
     .ingress = (
       (.ingress // []) as $ingress
       | {hostname: $hostname, service: $service} as $new_route
+      # Insert before the catch-all, or before an earlier wildcard that would shadow the new host
       | (reduce range(0; ($ingress | length)) as $i (
           null;
-          if . == null and ($ingress[$i].hostname == null and $ingress[$i].path == null) then $i else . end
+          if . != null then .
+          elif ($ingress[$i].hostname == null and $ingress[$i].path == null) then $i
+          elif (($ingress[$i].hostname // "") | startswith("*."))
+            and ($hostname | endswith(($ingress[$i].hostname // "")[1:])) then $i
+          else . end
         )) as $fallback_index
       | if $fallback_index == null then
           $ingress + [$new_route]
